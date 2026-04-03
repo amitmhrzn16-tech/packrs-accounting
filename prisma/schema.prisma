@@ -1,0 +1,177 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         String   @default("viewer") // super_admin, company_admin, accountant, viewer
+  slackUserId  String?  @map("slack_user_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  companies        CompanyUser[]
+  createdCompanies Company[]      @relation("CreatedCompanies")
+  transactions     Transaction[]  @relation("CreatedTransactions")
+  auditLogs        AuditLog[]
+  importBatches    ImportBatch[]
+
+  @@map("users")
+}
+
+model Company {
+  id              String   @id @default(cuid())
+  name            String
+  panVat          String?  @map("pan_vat")
+  fiscalYearStart String?  @map("fiscal_year_start") // e.g. "07-16" for mid-July
+  currency        String   @default("NPR")
+  openingBalance  Float    @default(0) @map("opening_balance")
+  logoUrl         String?  @map("logo_url")
+  isArchived      Boolean  @default(false) @map("is_archived")
+  createdById     String   @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  createdBy        User              @relation("CreatedCompanies", fields: [createdById], references: [id])
+  users            CompanyUser[]
+  categories       Category[]
+  transactions     Transaction[]
+  bankTransactions BankTransaction[]
+  importBatches    ImportBatch[]
+  auditLogs        AuditLog[]
+  recurringEntries RecurringEntry[]
+
+  @@map("companies")
+}
+
+model CompanyUser {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  userId    String @map("user_id")
+  role      String @default("viewer") // company_admin, accountant, viewer
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@map("company_users")
+}
+
+model Category {
+  id        String  @id @default(cuid())
+  companyId String  @map("company_id")
+  name      String
+  type      String  // income, expense
+  parentId  String? @map("parent_id")
+  isActive  Boolean @default(true) @map("is_active")
+
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parent       Category?     @relation("SubCategories", fields: [parentId], references: [id])
+  children     Category[]    @relation("SubCategories")
+  transactions Transaction[]
+
+  @@map("categories")
+}
+
+model Transaction {
+  id            String   @id @default(cuid())
+  companyId     String   @map("company_id")
+  type          String   // income, expense
+  amount        Float
+  categoryId    String?  @map("category_id")
+  particulars   String?
+  date          String   // YYYY-MM-DD
+  paymentMethod String?  @map("payment_method") // cash, bank, esewa, khalti, cheque
+  referenceNo   String?  @map("reference_no")
+  attachmentUrl String?  @map("attachment_url")
+  isReconciled  Boolean  @default(false) @map("is_reconciled")
+  bankTxnId     String?  @map("bank_txn_id")
+  createdById   String   @map("created_by")
+  source        String   @default("web") // web, slack, import
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category        Category?        @relation(fields: [categoryId], references: [id])
+  createdBy       User             @relation("CreatedTransactions", fields: [createdById], references: [id])
+  bankTransaction BankTransaction? @relation(fields: [bankTxnId], references: [id])
+
+  @@map("transactions")
+}
+
+model BankTransaction {
+  id              String  @id @default(cuid())
+  companyId       String  @map("company_id")
+  importBatchId   String  @map("import_batch_id")
+  date            String  // YYYY-MM-DD
+  description     String?
+  debit           Float?
+  credit          Float?
+  balance         Float?
+  isMatched       Boolean @default(false) @map("is_matched")
+  matchedTxnId    String? @map("matched_txn_id")
+  matchConfidence Float?  @map("match_confidence")
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  importBatch ImportBatch   @relation(fields: [importBatchId], references: [id])
+  transactions Transaction[]
+
+  @@map("bank_transactions")
+}
+
+model ImportBatch {
+  id         String   @id @default(cuid())
+  companyId  String   @map("company_id")
+  fileName   String   @map("file_name")
+  fileType   String   @map("file_type") // xlsx, csv, pdf
+  fileUrl    String?  @map("file_url")
+  rowCount   Int      @default(0) @map("row_count")
+  importedAt DateTime @default(now()) @map("imported_at")
+  importedBy String   @map("imported_by")
+
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user             User              @relation(fields: [importedBy], references: [id])
+  bankTransactions BankTransaction[]
+
+  @@map("import_batches")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  companyId  String?  @map("company_id")
+  action     String   // create, update, delete
+  entityType String   @map("entity_type") // transaction, company, category
+  entityId   String   @map("entity_id")
+  oldValues  String?  @map("old_values") // JSON string
+  newValues  String?  @map("new_values") // JSON string
+  timestamp  DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id])
+  company Company? @relation(fields: [companyId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model RecurringEntry {
+  id          String  @id @default(cuid())
+  companyId   String  @map("company_id")
+  type        String  // income, expense
+  amount      Float
+  categoryId  String? @map("category_id")
+  particulars String?
+  frequency   String  // monthly, weekly
+  nextRunDate String  @map("next_run_date") // YYYY-MM-DD
+  isActive    Boolean @default(true) @map("is_active")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("recurring_entries")
+}
