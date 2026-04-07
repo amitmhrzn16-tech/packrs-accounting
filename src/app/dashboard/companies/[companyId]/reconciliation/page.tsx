@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Sidebar } from '@/components/dashboard/sidebar';
+import { MainContent } from "@/components/dashboard/main-content";
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 
@@ -377,7 +378,7 @@ export default function ReconciliationPage({ params }: { params: { companyId: st
     <div className="flex h-screen bg-gray-50">
       <Sidebar companyId={params.companyId} companyName={companyName} />
 
-      <main className="flex-1 ml-64 overflow-auto">
+      <MainContent className="overflow-auto">
         <div className="p-8">
           <div className="mb-8">
             <h1 className="text-3xl font-bold text-gray-900">Bank Reconciliation</h1>
@@ -895,7 +896,7 @@ export default function ReconciliationPage({ params }: { params: { companyId: st
             </div>
           )}
         </div>
-      </main>
+      </MainContent>
 
       {/* Create Entry Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

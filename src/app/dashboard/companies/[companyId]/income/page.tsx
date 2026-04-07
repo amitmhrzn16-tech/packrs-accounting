@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { Sidebar } from '@/components/dashboard/sidebar';
+import CommentThread from '@/components/CommentThread';
+import { MainContent } from "@/components/dashboard/main-content";
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,7 +17,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, TrendingUp, Calendar, Paperclip, X } from 'lucide-react';
+import { Plus, TrendingUp, Calendar, Paperclip, X, Trash2, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 
@@ -45,6 +47,7 @@ const paymentMethods = ['Cash', 'Bank', 'eSewa', 'Khalti', 'Cheque'];
 export default function IncomePage({ params }: PageProps) {
   const { companyId } = params;
   const [income, setIncome] = useState<IncomeEntry[]>([]);
+  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [categories, setCategories] = useState<Category[]>([]);
   const [companyName, setCompanyName] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -52,6 +55,9 @@ export default function IncomePage({ params }: PageProps) {
   const [submitting, setSubmitting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -65,6 +71,24 @@ export default function IncomePage({ params }: PageProps) {
   useEffect(() => {
     fetchData();
   }, [companyId]);
+
+  // Live-poll comment counts every 5s so badges reflect other users' comments
+  useEffect(() => {
+    if (income.length === 0) return;
+    const ids = income.map((e) => e.id);
+    const tick = () => {
+      fetch('/api/transactions/comment-counts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionIds: ids }),
+      })
+        .then((r) => r.json())
+        .then((d) => setCommentCounts(d.counts || {}))
+        .catch(() => {});
+    };
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [income]);
 
   const fetchData = async () => {
     try {
@@ -85,9 +109,20 @@ export default function IncomePage({ params }: PageProps) {
       const categoriesData = await categoriesRes.json();
       const companyData = await companyRes.json();
 
-      setIncome(incomeData.transactions || []);
+      const list = incomeData.transactions || [];
+      setIncome(list);
       setCategories(categoriesData);
       setCompanyName(companyData.name);
+      if (list.length > 0) {
+        fetch('/api/transactions/comment-counts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transactionIds: list.map((t: any) => t.id) }),
+        })
+          .then((r) => r.json())
+          .then((d) => setCommentCounts(d.counts || {}))
+          .catch(() => {});
+      }
     } catch (error) {
       toast.error('Failed to load income data');
       console.error(error);
@@ -181,11 +216,70 @@ export default function IncomePage({ params }: PageProps) {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === income.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(income.map((e) => e.id)));
+    }
+  };
+
+  const handleDeleteSingle = async (id: string) => {
+    try {
+      setDeleting(true);
+      const res = await fetch(`/api/companies/${companyId}/transactions/delete?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to delete');
+      }
+      toast.success('Income entry deleted');
+      setDeleteConfirmId(null);
+      setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to delete');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      setDeleting(true);
+      const res = await fetch(`/api/companies/${companyId}/transactions/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to delete');
+      }
+      const data = await res.json();
+      toast.success(`Deleted ${data.deletedCount} entries`);
+      setSelectedIds(new Set());
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to delete');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar companyId={companyId} companyName={companyName} />
 
-      <div className="ml-64 flex-1 overflow-auto">
+      <MainContent className="overflow-auto">
         <div className="p-8">
           {/* Header */}
           <div className="flex items-center justify-between mb-8">
@@ -380,7 +474,21 @@ export default function IncomePage({ params }: PageProps) {
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                   <span>Income Entries</span>
-                  <Badge variant="secondary">{income.length}</Badge>
+                  <div className="flex items-center gap-2">
+                    {selectedIds.size > 0 && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="gap-1"
+                        disabled={deleting}
+                        onClick={handleBulkDelete}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete {selectedIds.size} selected
+                      </Button>
+                    )}
+                    <Badge variant="secondary">{income.length}</Badge>
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -388,58 +496,102 @@ export default function IncomePage({ params }: PageProps) {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 font-semibold text-gray-700">
-                          Date
+                        <th className="py-3 px-2 w-10">
+                          <button onClick={toggleSelectAll} className="text-gray-500 hover:text-gray-800">
+                            {selectedIds.size === income.length && income.length > 0 ? (
+                              <CheckSquare className="h-4 w-4" />
+                            ) : (
+                              <Square className="h-4 w-4" />
+                            )}
+                          </button>
                         </th>
-                        <th className="text-left py-3 px-4 font-semibold text-gray-700">
-                          Particulars
-                        </th>
-                        <th className="text-left py-3 px-4 font-semibold text-gray-700">
-                          Category
-                        </th>
-                        <th className="text-left py-3 px-4 font-semibold text-gray-700">
-                          Payment Method
-                        </th>
-                        <th className="text-right py-3 px-4 font-semibold text-gray-700">
-                          Amount
-                        </th>
+                        <th className="text-left py-3 px-4 font-semibold text-gray-700">Date</th>
+                        <th className="text-left py-3 px-4 font-semibold text-gray-700">Particulars</th>
+                        <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
+                        <th className="text-left py-3 px-4 font-semibold text-gray-700">Payment Method</th>
+                        <th className="text-right py-3 px-4 font-semibold text-gray-700">Amount</th>
+                        <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">💬</th>
+                        <th className="py-3 px-2 w-10"></th>
                       </tr>
                     </thead>
                     <tbody>
                       {income.map((entry) => (
                         <tr
                           key={entry.id}
-                          className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
+                          className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${selectedIds.has(entry.id) ? 'bg-green-50' : ''}`}
                         >
-                          <td className="py-3 px-4 text-gray-700 flex items-center gap-2">
-                            <Calendar className="h-4 w-4 text-gray-400" />
-                            {formatDate(entry.date)}
+                          <td className="py-3 px-2">
+                            <button onClick={() => toggleSelect(entry.id)} className="text-gray-500 hover:text-gray-800">
+                              {selectedIds.has(entry.id) ? (
+                                <CheckSquare className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Square className="h-4 w-4" />
+                              )}
+                            </button>
                           </td>
                           <td className="py-3 px-4 text-gray-700">
-                            {entry.particulars || '-'}
+                            <div className="flex items-center gap-2">
+                              <Calendar className="h-4 w-4 text-gray-400" />
+                              {formatDate(entry.date)}
+                            </div>
                           </td>
+                          <td className="py-3 px-4 text-gray-700">{entry.particulars || '-'}</td>
                           <td className="py-3 px-4">
                             <Badge variant="outline">{entry.category?.name || '—'}</Badge>
                           </td>
                           <td className="py-3 px-4 text-gray-700">
-                            <Badge variant="secondary">
-                              {entry.paymentMethod}
-                            </Badge>
+                            <Badge variant="secondary">{entry.paymentMethod}</Badge>
                           </td>
                           <td className="py-3 px-4 text-right font-semibold text-green-600">
                             {formatCurrency(entry.amount)}
+                          </td>
+                          <td className="py-3 px-2 text-center">
+                            <CommentThread
+                              transactionId={entry.id}
+                              initialCount={commentCounts[entry.id] || 0}
+                              onCountChange={(c) => setCommentCounts((prev) => ({ ...prev, [entry.id]: c }))}
+                            />
+                          </td>
+                          <td className="py-3 px-2">
+                            {deleteConfirmId === entry.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleDeleteSingle(entry.id)}
+                                  disabled={deleting}
+                                  className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                                >
+                                  {deleting ? '...' : 'Yes'}
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirmId(null)}
+                                  className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteConfirmId(entry.id)}
+                                className="text-gray-400 hover:text-red-500 transition-colors"
+                                title="Delete entry"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       <tr className="bg-green-50 border-t-2 border-green-200">
-                        <td colSpan={4} className="py-3 px-4 font-bold text-gray-900 text-right">
+                        <td colSpan={5} className="py-3 px-4 font-bold text-gray-900 text-right">
                           Total ({income.length} entries)
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-green-700 text-lg">
                           {formatCurrency(income.reduce((sum, entry) => sum + entry.amount, 0))}
                         </td>
+                        <td></td>
+                        <td></td>
                       </tr>
                     </tfoot>
                   </table>
@@ -448,7 +600,7 @@ export default function IncomePage({ params }: PageProps) {
             </Card>
           )}
         </div>
-      </div>
+      </MainContent>
     </div>
   );
 }

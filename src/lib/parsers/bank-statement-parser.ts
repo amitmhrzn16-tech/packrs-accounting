@@ -29,8 +29,8 @@ export interface ParseResult {
 // Common header patterns for auto-detection
 const DATE_PATTERNS = /date|txn\s*date|transaction\s*date|value\s*date|posting\s*date/i;
 const DESC_PATTERNS = /description|narration|particulars|details|remarks|memo/i;
-const DEBIT_PATTERNS = /debit|withdrawal|dr|amount\s*debit|debit\s*amount/i;
-const CREDIT_PATTERNS = /credit|deposit|cr|amount\s*credit|credit\s*amount/i;
+const DEBIT_PATTERNS = /debit|withdrawal|dr|amount\s*debit|debit\s*amount|cash\s*out|cashout|expense|paid|payment/i;
+const CREDIT_PATTERNS = /credit|deposit|cr|amount\s*credit|credit\s*amount|cash\s*in|cashin|income|received|receipt/i;
 const BALANCE_PATTERNS = /balance|closing|running\s*balance|available/i;
 
 function detectColumnMapping(headers: string[]): ColumnMapping | null {
@@ -135,7 +135,20 @@ function parseNumber(value: any): number | null {
 // ─── EXCEL / XLS PARSING ──────────────────────────────────────
 
 export function parseExcelBuffer(buffer: Buffer): ParseResult {
-  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+  } catch (err: any) {
+    console.error("Excel parse error:", err?.message || err);
+    // Try parsing as CSV fallback (some files are CSVs saved with .xlsx extension)
+    try {
+      const textContent = buffer.toString("utf-8");
+      if (textContent.includes(",") && textContent.includes("\n")) {
+        return parseCsvString(textContent);
+      }
+    } catch { /* ignore */ }
+    return { headers: [], previewRows: [], totalRows: 0, suggestedMapping: null };
+  }
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
 
@@ -219,8 +232,26 @@ export function parseCsvString(csvString: string): ParseResult {
  * debit, credit, and balance amounts.
  */
 export async function parsePdfBuffer(buffer: Buffer): Promise<ParseResult> {
-  const pdfData = await pdf(buffer);
+  let pdfData;
+  try {
+    pdfData = await pdf(buffer);
+  } catch (err: any) {
+    console.error("PDF parse error:", err?.message || err);
+    // Try to extract text as plain text fallback (some "PDFs" are actually text files)
+    try {
+      const textContent = buffer.toString("utf-8");
+      if (textContent.includes(",") && textContent.includes("\n")) {
+        // This looks like a CSV file saved with .pdf extension
+        return parseCsvString(textContent);
+      }
+    } catch { /* ignore */ }
+    return { headers: [], previewRows: [], totalRows: 0, suggestedMapping: null };
+  }
+
   const text = pdfData.text;
+  if (!text || text.trim().length === 0) {
+    return { headers: [], previewRows: [], totalRows: 0, suggestedMapping: null };
+  }
 
   const lines = text.split("\n");
 
@@ -236,6 +267,15 @@ export async function parsePdfBuffer(buffer: Buffer): Promise<ParseResult> {
 
   if (timeOnlyLines > 5 && dateOnlyLines > 5) {
     return parseNepaliBankPdf(lines);
+  }
+
+  // ─── Detect tabular PDF format (columns concatenated without spaces) ───
+  // Pattern: "2026-04-01Head Officecash" (date glued to other column text)
+  // followed by multi-line description, last line has amounts concatenated
+  const dateGluedPattern = /^\d{4}-\d{2}-\d{2}[A-Za-z]/;
+  const dateGluedLines = lines.filter((l) => dateGluedPattern.test(l.trim())).length;
+  if (dateGluedLines >= 3) {
+    return parseTabularPdf(lines);
   }
 
   // ─── Generic single-line PDF format ───
@@ -491,6 +531,199 @@ function splitConcatenatedAmounts(
     credit: "",
     balance: amountStr,
     balanceNum: isNaN(num) ? null : num,
+  };
+}
+
+/**
+ * Parse tabular PDF where pdf-parse concatenates columns without spaces.
+ *
+ * Pattern from the raw text:
+ *   "DateBranchAccountParticularsDr. AmountCr. AmountClosing Balance"  ← header (all glued)
+ *   "2026-04-01Head Officecash"      ← date + branch + account concatenated
+ *   "Daily "                          ← description line 1
+ *   "Collection - "                   ← description line 2
+ *   "manoj Thapa "                    ← description line 3 (may or may not have amounts)
+ *   "Magar45219867"                   ← last desc line + amounts concatenated
+ *
+ * The amounts are at the END of the last line before the next date line.
+ * We extract trailing numbers from that line. Numbers are concatenated:
+ *   - 2 numbers = [dr_or_cr_amount, closing_balance]
+ *   - 3 numbers = [dr_amount, cr_amount, closing_balance] (rare)
+ */
+function parseTabularPdf(lines: string[]): ParseResult {
+  const headers = ["Date", "Description", "Dr. Amount", "Cr. Amount", "Closing Balance"];
+  const dateGluedPattern = /^(\d{4}-\d{2}-\d{2})/;
+  const transactions: string[][] = [];
+  let prevBalance: number | null = null;
+
+  let i = 0;
+
+  // Skip to first transaction line
+  while (i < lines.length && !dateGluedPattern.test(lines[i].trim())) {
+    i++;
+  }
+
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) { i++; continue; }
+
+    const dateMatch = trimmed.match(dateGluedPattern);
+    if (!dateMatch) { i++; continue; }
+
+    const date = dateMatch[1];
+    i++;
+
+    // Collect all lines until the next date line (or end of file)
+    // These lines contain: description text + amounts on the last line
+    const contentLines: string[] = [];
+    while (i < lines.length) {
+      const nextTrimmed = lines[i].trim();
+      if (!nextTrimmed) { i++; continue; }
+      // Check if this is a new transaction (starts with date)
+      if (dateGluedPattern.test(nextTrimmed)) break;
+      contentLines.push(nextTrimmed);
+      i++;
+    }
+
+    if (contentLines.length === 0) continue;
+
+    // The amounts are trailing numbers on the LAST content line
+    // e.g., "Magar45219867" or "Balance1941519415" or "Prabin magar910060289"
+    // Strategy: find where text ends and numbers begin in the last line,
+    // then split the trailing number portion into amount(s) + balance
+    const lastLine = contentLines[contentLines.length - 1];
+
+    // Find the position where trailing digits start (numbers at the end)
+    // Look for the transition from letter/space to digit
+    let numStart = -1;
+    for (let j = lastLine.length - 1; j >= 0; j--) {
+      if (/\d/.test(lastLine[j])) {
+        numStart = j;
+      } else {
+        break;
+      }
+    }
+
+    if (numStart === -1) continue; // No numbers found
+
+    const textPart = lastLine.slice(0, numStart).trim();
+    const numberPart = lastLine.slice(numStart);
+
+    // Build description from all content lines, replacing the last line's text portion
+    const descParts = contentLines.slice(0, -1).map((l) => l.trim());
+    if (textPart) descParts.push(textPart);
+    let description = descParts.join(" ").replace(/\s+/g, " ").trim();
+
+    // Now split the concatenated numbers into amount + balance
+    // The numbers don't have separators, so we use balance comparison
+    // If we know the previous balance, we can determine the split point
+    let debit = "";
+    let credit = "";
+    let balance = "";
+
+    if (prevBalance !== null) {
+      // Try all possible split positions to find one where:
+      // prevBalance + credit - debit = newBalance
+      let found = false;
+      for (let splitPos = 1; splitPos < numberPart.length; splitPos++) {
+        const amountStr = numberPart.slice(0, splitPos);
+        const balanceStr = numberPart.slice(splitPos);
+        const amountNum = parseFloat(amountStr);
+        const balanceNum = parseFloat(balanceStr);
+
+        if (isNaN(amountNum) || isNaN(balanceNum) || amountNum <= 0 || balanceNum <= 0) continue;
+
+        // Check if this split makes sense:
+        // Credit: prevBalance + amount = balance
+        if (Math.abs(prevBalance + amountNum - balanceNum) < 0.01) {
+          credit = amountStr;
+          balance = balanceStr;
+          prevBalance = balanceNum;
+          found = true;
+          break;
+        }
+        // Debit: prevBalance - amount = balance
+        if (Math.abs(prevBalance - amountNum - balanceNum) < 0.01) {
+          debit = amountStr;
+          balance = balanceStr;
+          prevBalance = balanceNum;
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        // Fallback: assume the larger number is the balance (it's at the end)
+        // Split roughly in the middle by trying common patterns
+        const midPoint = Math.ceil(numberPart.length / 2);
+        const amountStr = numberPart.slice(0, midPoint);
+        const balanceStr = numberPart.slice(midPoint);
+        const amountNum = parseFloat(amountStr);
+        const balanceNum = parseFloat(balanceStr);
+        if (!isNaN(amountNum) && !isNaN(balanceNum)) {
+          if (balanceNum > prevBalance) {
+            credit = amountStr;
+          } else {
+            debit = amountStr;
+          }
+          balance = balanceStr;
+          prevBalance = balanceNum;
+        }
+      }
+    } else {
+      // First transaction (no previous balance to compare)
+      // Special case: "Opening Balance" → the number IS the balance
+      if (description.toLowerCase().includes("opening") && description.toLowerCase().includes("balance")) {
+        // For opening balance like "1941519415": amount = balance (same number repeated)
+        // Or it could be a single number if there's only a balance
+        // Try to see if the number is a repeated value
+        const halfLen = numberPart.length / 2;
+        if (numberPart.length % 2 === 0 && numberPart.slice(0, halfLen) === numberPart.slice(halfLen)) {
+          // Same number repeated twice: "1941519415" → amount=19415, balance=19415
+          debit = numberPart.slice(0, halfLen);
+          balance = numberPart.slice(halfLen);
+          prevBalance = parseFloat(balance) || null;
+        } else {
+          // Try splitting: amount + balance where they differ
+          for (let splitPos = 1; splitPos < numberPart.length; splitPos++) {
+            const a = numberPart.slice(0, splitPos);
+            const b = numberPart.slice(splitPos);
+            const aNum = parseFloat(a);
+            const bNum = parseFloat(b);
+            if (!isNaN(aNum) && !isNaN(bNum) && aNum === bNum) {
+              debit = a;
+              balance = b;
+              prevBalance = bNum;
+              break;
+            }
+          }
+          if (!balance) {
+            // Can't split — treat entire thing as balance
+            balance = numberPart;
+            prevBalance = parseFloat(numberPart) || null;
+          }
+        }
+      } else {
+        // First non-opening transaction without prevBalance
+        // Can't determine split reliably; try half-split
+        const halfLen = Math.ceil(numberPart.length / 2);
+        credit = numberPart.slice(0, halfLen);
+        balance = numberPart.slice(halfLen);
+        prevBalance = parseFloat(balance) || null;
+      }
+    }
+
+    if (date) {
+      transactions.push([date, description, debit, credit, balance]);
+    }
+  }
+
+  return {
+    headers,
+    previewRows: transactions.slice(0, 10),
+    allRows: transactions,
+    totalRows: transactions.length,
+    suggestedMapping: { date: 0, description: 1, debit: 2, credit: 3, balance: 4 },
   };
 }
 

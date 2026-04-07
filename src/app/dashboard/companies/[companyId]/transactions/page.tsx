@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Sidebar } from '@/components/dashboard/sidebar';
+import { MainContent } from "@/components/dashboard/main-content";
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -136,7 +137,7 @@ export default function TransactionsPage({ params }: PageProps) {
     <div className="flex h-screen bg-gray-50">
       <Sidebar companyId={companyId} companyName={companyName} />
 
-      <main className="flex-1 ml-64 overflow-auto">
+      <MainContent className="overflow-auto">
         <div className="p-8">
           {/* Header */}
           <div className="mb-8">
@@ -361,7 +362,7 @@ export default function TransactionsPage({ params }: PageProps) {
             </CardContent>
           </Card>
         </div>
-      </main>
+      </MainContent>
     </div>
   );
 }

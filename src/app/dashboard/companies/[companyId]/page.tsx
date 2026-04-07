@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/dashboard/sidebar";
+import { MainContent } from "@/components/dashboard/main-content";
 import { StatCard } from "@/components/charts/stat-card";
 import { IncomeExpenseChart } from "@/components/charts/income-expense-chart";
 import { CategoryPieChart } from "@/components/charts/category-pie-chart";
@@ -100,7 +101,7 @@ export default function CompanyDashboard({
     return (
       <div className="flex h-screen bg-gray-100">
         <Sidebar companyId={params.companyId} companyName="Loading..." />
-        <div className="flex-1 ml-64 p-8">
+        <MainContent className="p-8">
           <div className="space-y-4">
             <div className="h-10 bg-gray-300 rounded animate-pulse"></div>
             <div className="grid grid-cols-3 gap-4">
@@ -113,7 +114,7 @@ export default function CompanyDashboard({
             </div>
             <div className="h-96 bg-gray-300 rounded animate-pulse"></div>
           </div>
-        </div>
+        </MainContent>
       </div>
     );
   }
@@ -122,11 +123,11 @@ export default function CompanyDashboard({
     return (
       <div className="flex h-screen bg-gray-100">
         <Sidebar companyId={params.companyId} companyName="Error" />
-        <div className="flex-1 ml-64 p-8">
+        <MainContent className="p-8">
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
             <p>Error loading dashboard: {error}</p>
           </div>
-        </div>
+        </MainContent>
       </div>
     );
   }
@@ -162,7 +163,7 @@ export default function CompanyDashboard({
         companyId={params.companyId}
         companyName={companyData.name}
       />
-      <div className="flex-1 ml-64 p-8 overflow-auto">
+      <MainContent className="p-8 overflow-auto">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">
@@ -361,7 +362,7 @@ export default function CompanyDashboard({
             </CardContent>
           </Card>
         </div>
-      </div>
+      </MainContent>
     </div>
   );
 }

@@ -13,6 +13,8 @@ import {
   ClipboardCheck,
   FileText,
   RefreshCw,
+  Upload,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Sidebar } from '@/components/dashboard/sidebar';
+import { MainContent } from "@/components/dashboard/main-content";
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 
@@ -59,6 +62,31 @@ interface CashCountResult {
   discrepancy: number;
 }
 
+interface PreviewData {
+  batchId: string;
+  headers: string[];
+  previewRows: (string | number)[][];
+  suggestedMapping: Record<string, number>;
+  totalRows: number;
+}
+
+interface ColumnMapping {
+  date: number;
+  description: number;
+  debit: number;
+  credit: number;
+  balance?: number;
+}
+
+interface ImportResult {
+  imported: number;
+  matched: number;
+  unmatched: number;
+  transactions: number;
+  error?: string;
+  debug?: any;
+}
+
 interface CashCountHistory {
   id: string;
   timestamp: string;
@@ -73,7 +101,7 @@ export default function CashReconciliationPage({
   const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(true);
   const [cashData, setCashData] = useState<CashData | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'count' | 'history' | 'transactions'>(
+  const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'count' | 'history' | 'transactions'>(
     'overview'
   );
 
@@ -94,6 +122,19 @@ export default function CashReconciliationPage({
 
   // Cash count history
   const [cashCountHistory, setCashCountHistory] = useState<CashCountHistory[]>([]);
+
+  // Import state
+  const [importStep, setImportStep] = useState<'upload' | 'mapping'>('upload');
+  const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
+  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
+  const [columnMapping, setColumnMapping] = useState<ColumnMapping>({
+    date: 0,
+    description: 1,
+    debit: 2,
+    credit: 3,
+  });
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -150,6 +191,109 @@ export default function CashReconciliationPage({
     setDateFrom('');
     setDateTo('');
     setTimeout(() => fetchData(), 0);
+  }
+
+  // ── Import handlers ──
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      const validTypes = ['.xlsx', '.xls', '.csv', '.pdf'];
+      const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+      if (!validTypes.includes(ext)) {
+        toast.error('Please upload a .xlsx, .xls, .csv, or .pdf file');
+        return;
+      }
+      setSelectedImportFile(file);
+      handleUploadFile(file);
+    }
+  }
+
+  async function handleUploadFile(file: File) {
+    try {
+      setImporting(true);
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('step', 'preview');
+
+      const res = await fetch(`/api/companies/${params.companyId}/import`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setPreviewData(data);
+        const sm = data.suggestedMapping;
+        setColumnMapping({
+          date: sm?.date ?? 0,
+          description: sm?.description ?? 1,
+          debit: sm?.debit ?? 2,
+          credit: sm?.credit ?? 3,
+          balance: sm?.balance,
+        });
+        setImportStep('mapping');
+      } else {
+        toast.error(data?.error || 'Failed to process file');
+      }
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      toast.error('Upload failed: ' + (err?.message || 'Network error'));
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function handleConfirmImport() {
+    if (!previewData) return;
+    try {
+      setImporting(true);
+      const formData = new FormData();
+      formData.append('step', 'confirm');
+      formData.append('batchId', previewData.batchId);
+      formData.append('mapping', JSON.stringify(columnMapping));
+      formData.append('paymentMethod', 'cash');
+
+      const res = await fetch(`/api/companies/${params.companyId}/import`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setImportResult(data);
+        if (data.imported > 0) {
+          toast.success(
+            `Imported ${data.imported} cash transactions (${data.transactions} entries created)`
+          );
+          fetchData();
+        } else if (data.error) {
+          // API returned 200 but with error message (e.g. 0 rows parsed)
+          setImportResult(data);
+          toast.error(data.error);
+        } else {
+          setImportResult({ imported: 0, matched: 0, unmatched: 0, transactions: 0, error: 'No valid rows found. Check column mapping.' });
+          toast.error('No valid rows found. Check column mapping.');
+        }
+      } else {
+        toast.error(data?.error || 'Import failed');
+        setImportResult({ imported: 0, matched: 0, unmatched: 0, transactions: 0, error: data?.error || 'Import failed' });
+      }
+    } catch (err) {
+      console.error('Import error:', err);
+      toast.error('Import failed');
+      setImportResult({ imported: 0, matched: 0, unmatched: 0, transactions: 0, error: 'Import failed - check console' });
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function resetImport() {
+    setImportStep('upload');
+    setSelectedImportFile(null);
+    setPreviewData(null);
+    setImportResult(null);
   }
 
   async function submitCashCount() {
@@ -228,7 +372,7 @@ export default function CashReconciliationPage({
     return (
       <div className="flex min-h-screen bg-gray-50">
         <Sidebar companyId={params.companyId} companyName="Loading..." />
-        <div className="flex-1 ml-64 p-8">
+        <MainContent className="p-8">
           <div className="space-y-4">
             <div className="h-10 bg-gray-200 rounded animate-pulse w-64" />
             <div className="grid grid-cols-4 gap-4">
@@ -238,7 +382,7 @@ export default function CashReconciliationPage({
             </div>
             <div className="h-96 bg-gray-200 rounded animate-pulse" />
           </div>
-        </div>
+        </MainContent>
       </div>
     );
   }
@@ -246,7 +390,7 @@ export default function CashReconciliationPage({
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar companyId={params.companyId} companyName={companyName} />
-      <div className="flex-1 ml-64 overflow-auto">
+      <MainContent className="overflow-auto">
         <div className="p-8">
           {/* Header */}
           <div className="flex items-center gap-3 mb-8">
@@ -263,6 +407,7 @@ export default function CashReconciliationPage({
           <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
             {[
               { key: 'overview' as const, label: 'Overview', icon: Wallet },
+              { key: 'import' as const, label: 'Import Statement', icon: Upload },
               { key: 'count' as const, label: 'Cash Count', icon: Calculator },
               { key: 'transactions' as const, label: 'Cash Transactions', icon: ArrowDownUp },
               { key: 'history' as const, label: 'Monthly Summary', icon: FileText },
@@ -576,6 +721,288 @@ export default function CashReconciliationPage({
                   )}
                 </CardContent>
               </Card>
+            </div>
+          )}
+
+          {/* ═══════════ IMPORT TAB ═══════════ */}
+          {activeTab === 'import' && (
+            <div className="space-y-6">
+              {importStep === 'upload' && !importResult && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Upload className="h-5 w-5 text-amber-600" />
+                      Upload Cash Statement
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-6">
+                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-amber-400 transition-colors">
+                        <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                        <p className="text-gray-900 font-medium mb-2">
+                          Drop your cash statement file here or click to browse
+                        </p>
+                        <p className="text-gray-600 text-sm mb-6">
+                          Supported formats: .xlsx, .xls, .csv, .pdf
+                        </p>
+                        <Input
+                          type="file"
+                          accept=".xlsx,.xls,.csv,.pdf"
+                          onChange={handleFileSelect}
+                          className="hidden"
+                          id="cash-file-upload"
+                          disabled={importing}
+                        />
+                        <Button
+                          variant="outline"
+                          disabled={importing}
+                          onClick={() =>
+                            document.getElementById('cash-file-upload')?.click()
+                          }
+                        >
+                          {importing ? 'Processing...' : 'Select File'}
+                        </Button>
+                      </div>
+
+                      {selectedImportFile && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center gap-3">
+                          <FileSpreadsheet className="h-5 w-5 text-amber-600" />
+                          <div>
+                            <p className="font-medium text-amber-900">
+                              {selectedImportFile.name}
+                            </p>
+                            <p className="text-sm text-amber-700">
+                              {(selectedImportFile.size / 1024).toFixed(2)} KB
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <h4 className="font-medium text-gray-900 mb-2">
+                          How it works
+                        </h4>
+                        <ol className="text-sm text-gray-600 space-y-1 list-decimal list-inside">
+                          <li>Upload your cash ledger or petty cash statement (Excel, CSV, or PDF)</li>
+                          <li>Map the columns (date, description, cash in, cash out)</li>
+                          <li>Confirm to import all transactions as cash entries</li>
+                          <li>Use Cash Count to verify physical cash against imported records</li>
+                        </ol>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {importStep === 'mapping' && previewData && !importResult && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Column Mapping & Preview</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-6">
+                      {/* Column Mapping Controls */}
+                      <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+                        <div>
+                          <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                            Date Column
+                          </Label>
+                          <select
+                            value={columnMapping.date}
+                            onChange={(e) =>
+                              setColumnMapping({
+                                ...columnMapping,
+                                date: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                          >
+                            {previewData.headers.map((h, i) => (
+                              <option key={i} value={i}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                            Description Column
+                          </Label>
+                          <select
+                            value={columnMapping.description}
+                            onChange={(e) =>
+                              setColumnMapping({
+                                ...columnMapping,
+                                description: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                          >
+                            {previewData.headers.map((h, i) => (
+                              <option key={i} value={i}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                            Cash Out / Debit Column
+                          </Label>
+                          <select
+                            value={columnMapping.debit}
+                            onChange={(e) =>
+                              setColumnMapping({
+                                ...columnMapping,
+                                debit: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                          >
+                            {previewData.headers.map((h, i) => (
+                              <option key={i} value={i}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                            Cash In / Credit Column
+                          </Label>
+                          <select
+                            value={columnMapping.credit}
+                            onChange={(e) =>
+                              setColumnMapping({
+                                ...columnMapping,
+                                credit: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                          >
+                            {previewData.headers.map((h, i) => (
+                              <option key={i} value={i}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Preview Table */}
+                      <div>
+                        <h4 className="font-medium text-gray-900 mb-3">
+                          Preview ({previewData.totalRows} rows total)
+                        </h4>
+                        <div className="overflow-x-auto border rounded-lg">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50">
+                                {previewData.headers.map((h, i) => (
+                                  <th
+                                    key={i}
+                                    className={`text-left py-2 px-3 font-medium ${
+                                      i === columnMapping.date
+                                        ? 'bg-blue-50 text-blue-700'
+                                        : i === columnMapping.description
+                                        ? 'bg-purple-50 text-purple-700'
+                                        : i === columnMapping.debit
+                                        ? 'bg-red-50 text-red-700'
+                                        : i === columnMapping.credit
+                                        ? 'bg-green-50 text-green-700'
+                                        : 'text-gray-700'
+                                    }`}
+                                  >
+                                    {h}
+                                    {i === columnMapping.date && ' (Date)'}
+                                    {i === columnMapping.description && ' (Desc)'}
+                                    {i === columnMapping.debit && ' (Cash Out)'}
+                                    {i === columnMapping.credit && ' (Cash In)'}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {previewData.previewRows.slice(0, 10).map((row, ri) => (
+                                <tr key={ri} className="border-t">
+                                  {row.map((cell, ci) => (
+                                    <td key={ci} className="py-2 px-3">
+                                      {cell?.toString() || ''}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+                        All imported transactions will be saved as <strong>cash</strong> payment method.
+                      </div>
+
+                      <div className="flex gap-3">
+                        <Button variant="outline" onClick={resetImport}>
+                          Back
+                        </Button>
+                        <Button onClick={handleConfirmImport} disabled={importing}>
+                          {importing
+                            ? 'Importing...'
+                            : `Import ${previewData.totalRows} Cash Transactions`}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {importResult && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Import Complete</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-4 bg-green-50 border border-green-200 rounded-lg text-center">
+                          <p className="text-xs text-green-600 uppercase font-medium">
+                            Imported
+                          </p>
+                          <p className="text-2xl font-bold text-green-700 mt-1">
+                            {importResult.imported}
+                          </p>
+                        </div>
+                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-center">
+                          <p className="text-xs text-blue-600 uppercase font-medium">
+                            Entries Created
+                          </p>
+                          <p className="text-2xl font-bold text-blue-700 mt-1">
+                            {importResult.transactions}
+                          </p>
+                        </div>
+                        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-center">
+                          <p className="text-xs text-amber-600 uppercase font-medium">
+                            Matched
+                          </p>
+                          <p className="text-2xl font-bold text-amber-700 mt-1">
+                            {importResult.matched}
+                          </p>
+                        </div>
+                        <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg text-center">
+                          <p className="text-xs text-gray-600 uppercase font-medium">
+                            Unmatched
+                          </p>
+                          <p className="text-2xl font-bold text-gray-700 mt-1">
+                            {importResult.unmatched}
+                          </p>
+                        </div>
+                      </div>
+
+                      {importResult.error && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                          {importResult.error}
+                        </div>
+                      )}
+
+                      <Button onClick={resetImport} className="w-full">
+                        Import Another File
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           )}
 
@@ -991,7 +1418,7 @@ export default function CashReconciliationPage({
             </div>
           )}
         </div>
-      </div>
+      </MainContent>
 
       {/* ═══════════ ADJUST DISCREPANCY DIALOG ═══════════ */}
       <Dialog open={adjustDialogOpen} onOpenChange={setAdjustDialogOpen}>

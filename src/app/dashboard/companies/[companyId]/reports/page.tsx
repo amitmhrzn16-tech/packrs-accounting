@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Sidebar } from '@/components/dashboard/sidebar';
+import { MainContent } from "@/components/dashboard/main-content";
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -171,7 +172,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
   return (
     <div className="flex h-screen bg-gray-100">
       <Sidebar companyId={params.companyId} companyName={companyName} />
-      <div className="flex-1 ml-64 p-8 overflow-auto">
+      <MainContent className="p-8 overflow-auto">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
@@ -518,7 +519,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
             <p className="text-gray-500 mt-2">Use the quick presets above or pick custom dates</p>
           </div>
         )}
-      </div>
+      </MainContent>
     </div>
   );
 }

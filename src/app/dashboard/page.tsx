@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Building2, TrendingUp, TrendingDown, Wallet, ArrowDownUp, CreditCard, Landmark } from "lucide-react";
 import { Sidebar } from "@/components/dashboard/sidebar";
+import { MainContent } from "@/components/dashboard/main-content";
 import { CompanyCard } from "@/components/dashboard/company-card";
 import { StatCard } from "@/components/charts/stat-card";
 import { Button } from "@/components/ui/button";
@@ -127,7 +128,7 @@ export default function MasterDashboard() {
   return (
     <div className="flex min-h-screen">
       <Sidebar />
-      <main className="flex-1 ml-64">
+      <MainContent>
         <div className="border-b bg-card">
           <div className="flex h-16 items-center justify-between px-8">
             <div>
@@ -292,7 +293,7 @@ export default function MasterDashboard() {
             </div>
           )}
         </div>
-      </main>
+      </MainContent>
     </div>
   );
 }
