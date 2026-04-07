@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { SUPPORTED_CURRENCIES } from "@/lib/utils";
 import {
   Settings,
   Plus,
@@ -45,6 +46,7 @@ export default function CompanySettings({
   const [companyName, setCompanyName] = useState("");
   const [panVat, setPanVat] = useState("");
   const [currency, setCurrency] = useState("NPR");
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [openingBalance, setOpeningBalance] = useState("");
   const [savingCompany, setSavingCompany] = useState(false);
 
@@ -87,6 +89,7 @@ export default function CompanySettings({
         setCompanyName(data.name || "");
         setPanVat(data.panVat || "");
         setCurrency(data.currency || "NPR");
+        setSlackWebhookUrl(data.slackWebhookUrl || "");
         // Opening balance could be stored in company metadata — for now use fiscalYearStart field
         setOpeningBalance(data.openingBalance || "");
       }
@@ -150,7 +153,7 @@ export default function CompanySettings({
       const res = await fetch(`/api/companies/${companyId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: companyName, panVat, currency }),
+        body: JSON.stringify({ name: companyName, panVat, currency, slackWebhookUrl }),
       });
       if (!res.ok) throw new Error();
       toast.success("Company details saved");
@@ -311,12 +314,27 @@ export default function CompanySettings({
                         onChange={(e) => setCurrency(e.target.value)}
                         className="mt-1.5 w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
-                        <option value="NPR">NPR — Nepalese Rupee</option>
-                        <option value="USD">USD — US Dollar</option>
-                        <option value="INR">INR — Indian Rupee</option>
-                        <option value="EUR">EUR — Euro</option>
-                        <option value="GBP">GBP — British Pound</option>
+                        {SUPPORTED_CURRENCIES.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.code} — {c.name} ({c.symbol})
+                          </option>
+                        ))}
                       </select>
+                    </div>
+                    <div>
+                      <Label htmlFor="slackWebhookUrl">Slack Webhook URL</Label>
+                      <Input
+                        id="slackWebhookUrl"
+                        type="url"
+                        value={slackWebhookUrl}
+                        onChange={(e) => setSlackWebhookUrl(e.target.value)}
+                        placeholder="https://hooks.slack.com/services/..."
+                        className="mt-1.5"
+                      />
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        New comments and new income/expense entries will be posted to this Slack channel.
+                        Leave blank to use the global SLACK_WEBHOOK_URL fallback (if configured).
+                      </p>
                     </div>
                     <Button type="submit" disabled={savingCompany}>
                       {savingCompany ? "Saving..." : "Save Changes"}

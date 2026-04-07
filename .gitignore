@@ -4,3 +4,7 @@ node_modules/
 .env.local
 *.db
 *.db-journal
+tsconfig.tsbuildinfo
+slack_reporter/
+__pycache__/
+*.pyc

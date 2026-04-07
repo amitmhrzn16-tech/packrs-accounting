@@ -52,7 +52,7 @@ export default function CommentThread({
     };
 
     load();
-    const interval = setInterval(load, 4000);
+    const interval = setInterval(load, 3000);
     return () => {
       cancelled = true;
       clearInterval(interval);

@@ -37,6 +37,7 @@ model Company {
   currency        String   @default("NPR")
   openingBalance  Float    @default(0) @map("opening_balance")
   logoUrl         String?  @map("logo_url")
+  slackWebhookUrl String?  @map("slack_webhook_url")
   isArchived      Boolean  @default(false) @map("is_archived")
   createdById     String   @map("created_by")
   createdAt       DateTime @default(now()) @map("created_at")

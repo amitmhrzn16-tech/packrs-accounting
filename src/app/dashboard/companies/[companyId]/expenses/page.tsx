@@ -38,6 +38,7 @@ export default function ExpensesPage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [companyName, setCompanyName] = useState<string>('');
+  const [companyCurrency, setCompanyCurrency] = useState<string>('NPR');
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -75,7 +76,7 @@ export default function ExpensesPage() {
         .then((d) => setCommentCounts(d.counts || {}))
         .catch(() => {});
     };
-    const interval = setInterval(tick, 5000);
+    const interval = setInterval(tick, 3000);
     return () => clearInterval(interval);
   }, [expenses]);
 
@@ -110,6 +111,7 @@ export default function ExpensesPage() {
       if (companyRes.ok) {
         const companyData = await companyRes.json();
         setCompanyName(companyData.name);
+        setCompanyCurrency(companyData.currency || 'NPR');
       }
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -375,7 +377,7 @@ export default function ExpensesPage() {
                           <td className="py-3 px-4 text-gray-900">{expense.particulars || '-'}</td>
                           <td className="py-3 px-4"><Badge variant="outline">{expense.category?.name || '—'}</Badge></td>
                           <td className="py-3 px-4 text-gray-900"><Badge variant="secondary">{expense.paymentMethod}</Badge></td>
-                          <td className="py-3 px-4 text-right text-red-600 font-semibold">{formatCurrency(expense.amount)}</td>
+                          <td className="py-3 px-4 text-right text-red-600 font-semibold">{formatCurrency(expense.amount, companyCurrency)}</td>
                           <td className="py-3 px-2 text-center">
                             <CommentThread
                               transactionId={expense.id}
@@ -403,7 +405,7 @@ export default function ExpensesPage() {
                     <tfoot>
                       <tr className="bg-red-50 border-t-2 border-red-200">
                         <td colSpan={5} className="py-3 px-4 font-bold text-gray-900 text-right">Total ({expenses.length} entries)</td>
-                        <td className="py-3 px-4 text-right font-bold text-red-700 text-lg">{formatCurrency(expenses.reduce((sum, entry) => sum + entry.amount, 0))}</td>
+                        <td className="py-3 px-4 text-right font-bold text-red-700 text-lg">{formatCurrency(expenses.reduce((sum, entry) => sum + entry.amount, 0), companyCurrency)}</td>
                         <td></td>
                         <td></td>
                       </tr>
