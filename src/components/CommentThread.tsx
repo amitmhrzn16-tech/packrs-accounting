@@ -36,15 +36,27 @@ export default function CommentThread({
 
   useEffect(() => {
     if (!open) return;
-    fetch(`/api/transactions/${transactionId}/comments`)
-      .then((r) => r.json())
-      .then((data) => {
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/transactions/${transactionId}/comments`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
         const list: Comment[] = data.comments || [];
         setComments(list);
         setCount(list.length);
         onCountChange?.(list.length);
-      })
-      .catch(() => {});
+      } catch {}
+    };
+
+    load();
+    const interval = setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [open, transactionId]);
 
   useEffect(() => {

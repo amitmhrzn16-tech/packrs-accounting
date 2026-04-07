@@ -61,6 +61,24 @@ export default function ExpensesPage() {
     fetchData();
   }, [companyId]);
 
+  // Live-poll comment counts every 5s so badges reflect other users' comments
+  useEffect(() => {
+    if (expenses.length === 0) return;
+    const ids = expenses.map((e) => e.id);
+    const tick = () => {
+      fetch('/api/transactions/comment-counts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionIds: ids }),
+      })
+        .then((r) => r.json())
+        .then((d) => setCommentCounts(d.counts || {}))
+        .catch(() => {});
+    };
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [expenses]);
+
   const fetchData = async () => {
     try {
       setLoading(true);
