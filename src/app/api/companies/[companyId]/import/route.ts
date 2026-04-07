@@ -40,6 +40,7 @@ export async function POST(
     const step = formData.get("step") as string; // "preview" or "confirm"
     const mappingJson = formData.get("mapping") as string | null;
     const batchId = formData.get("batchId") as string | null;
+    const paymentMethodOverride = formData.get("paymentMethod") as string | null;
 
     // ─── STEP 1: PREVIEW ────────────────────────────────────────
     if (step === "preview") {
@@ -62,17 +63,25 @@ export async function POST(
 
       let parseResult;
 
-      if (fileType === "pdf") {
-        parseResult = await parsePdfBuffer(buffer);
-      } else if (fileType === "csv") {
-        parseResult = parseCsvString(buffer.toString("utf-8"));
-      } else {
-        parseResult = parseExcelBuffer(buffer);
+      try {
+        if (fileType === "pdf") {
+          parseResult = await parsePdfBuffer(buffer);
+        } else if (fileType === "csv") {
+          parseResult = parseCsvString(buffer.toString("utf-8"));
+        } else {
+          parseResult = parseExcelBuffer(buffer);
+        }
+      } catch (parseError: any) {
+        console.error("File parse error:", parseError);
+        return NextResponse.json(
+          { error: `Failed to parse ${fileType.toUpperCase()} file: ${parseError?.message || "Unknown error"}. Make sure the file is a valid ${fileType.toUpperCase()} document.` },
+          { status: 400 }
+        );
       }
 
       if (parseResult.totalRows === 0) {
         return NextResponse.json(
-          { error: "No data rows found in the file" },
+          { error: `No data rows found in the ${fileType.toUpperCase()} file. Make sure the file contains transaction data with dates and amounts.` },
           { status: 400 }
         );
       }
@@ -182,9 +191,9 @@ export async function POST(
             companyId: params.companyId,
             type: isIncome ? "income" : "expense",
             amount,
-            particulars: row.description || "Imported from bank statement",
+            particulars: row.description || (paymentMethodOverride === "cash" ? "Imported from cash statement" : "Imported from bank statement"),
             date: row.date,
-            paymentMethod: "bank",
+            paymentMethod: paymentMethodOverride || "bank",
             createdById: session.user.id,
             source: "import",
             isReconciled: true,
@@ -234,8 +243,11 @@ export async function POST(
     }
 
     return NextResponse.json({ error: "Invalid step parameter" }, { status: 400 });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Import error:", error);
-    return NextResponse.json({ error: "Import failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: `Import failed: ${error?.message || "Unknown server error"}` },
+      { status: 500 }
+    );
   }
 }

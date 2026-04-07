@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const session = await auth();
 
@@ -13,8 +13,13 @@ export async function GET() {
       );
     }
 
+    // Super admins can request all companies with ?all=true
+    const url = new URL(request.url);
+    const fetchAll = url.searchParams.get("all") === "true";
+    const isSuperAdmin = (session.user as any).role === "super_admin";
+
     const companies = await prisma.company.findMany({
-      where: {
+      where: (fetchAll && isSuperAdmin) ? {} : {
         users: {
           some: {
             userId: session.user.id,

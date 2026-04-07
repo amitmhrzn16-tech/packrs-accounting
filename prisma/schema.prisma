@@ -22,6 +22,9 @@ model User {
   transactions     Transaction[]  @relation("CreatedTransactions")
   auditLogs        AuditLog[]
   importBatches    ImportBatch[]
+  sentMessages     ChatMessage[]  @relation("SentMessages")
+  receivedMessages ChatMessage[]  @relation("ReceivedMessages")
+  transactionComments TransactionComment[]
 
   @@map("users")
 }
@@ -39,14 +42,18 @@ model Company {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  createdBy        User              @relation("CreatedCompanies", fields: [createdById], references: [id])
-  users            CompanyUser[]
-  categories       Category[]
-  transactions     Transaction[]
-  bankTransactions BankTransaction[]
-  importBatches    ImportBatch[]
-  auditLogs        AuditLog[]
-  recurringEntries RecurringEntry[]
+  createdBy            User                  @relation("CreatedCompanies", fields: [createdById], references: [id])
+  users                CompanyUser[]
+  categories           Category[]
+  transactions         Transaction[]
+  bankTransactions     BankTransaction[]
+  importBatches        ImportBatch[]
+  auditLogs            AuditLog[]
+  recurringEntries     RecurringEntry[]
+  dmsSyncConfig           DmsSyncConfig?
+  dmsSyncedTransactions   DmsSyncedTransaction[]
+  paymentMethodBalances   PaymentMethodBalance[]
+  chatMessages            ChatMessage[]
 
   @@map("companies")
 }
@@ -98,12 +105,48 @@ model Transaction {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category        Category?        @relation(fields: [categoryId], references: [id])
-  createdBy       User             @relation("CreatedTransactions", fields: [createdById], references: [id])
-  bankTransaction BankTransaction? @relation(fields: [bankTxnId], references: [id])
+  company              Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category             Category?             @relation(fields: [categoryId], references: [id])
+  createdBy            User                  @relation("CreatedTransactions", fields: [createdById], references: [id])
+  bankTransaction      BankTransaction?      @relation(fields: [bankTxnId], references: [id])
+  dmsSyncedTransactions DmsSyncedTransaction[]
+  comments              TransactionComment[]
 
   @@map("transactions")
+}
+
+// ─── CHAT & COMMENTS ────────────────────────────────────────
+
+model ChatMessage {
+  id          String   @id @default(cuid())
+  senderId    String   @map("sender_id")
+  // Exactly one of recipientId (DM) or companyId (channel) will be set
+  recipientId String?  @map("recipient_id")
+  companyId   String?  @map("company_id")
+  content     String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  sender    User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User?    @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([senderId, recipientId])
+  @@index([companyId])
+  @@map("chat_messages")
+}
+
+model TransactionComment {
+  id            String   @id @default(cuid())
+  transactionId String   @map("transaction_id")
+  userId        String   @map("user_id")
+  content       String
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId])
+  @@map("transaction_comments")
 }
 
 model BankTransaction {
@@ -174,4 +217,82 @@ model RecurringEntry {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@map("recurring_entries")
+}
+
+// ─── PAYMENT METHOD OPENING BALANCES ────────────────────────
+
+model PaymentMethodBalance {
+  id              String  @id @default(cuid())
+  companyId       String  @map("company_id")
+  paymentMethod   String  @map("payment_method") // cash, bank, esewa, khalti, cheque, fonepay
+  openingBalance  Float   @default(0) @map("opening_balance")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, paymentMethod])
+  @@map("payment_method_balances")
+}
+
+// ─── DMS INTEGRATION ────────────────────────────────────────
+
+model DmsSyncConfig {
+  id            String   @id @default(cuid())
+  companyId     String   @unique @map("company_id")
+  dmsBaseUrl    String   @map("dms_base_url") // e.g. https://dms.packrscourier.com.np/dmsadmin
+  dmsUsername   String   @map("dms_username")
+  dmsPassword   String   @map("dms_password") // encrypted
+  branchId      String   @default("1") @map("branch_id") // DMS branch ID to sync
+  branchName    String   @default("Head Office") @map("branch_name")
+  syncEnabled   Boolean  @default(true) @map("sync_enabled")
+  syncFrequency String   @default("daily") @map("sync_frequency") // daily, hourly, manual
+  lastSyncAt    String?  @map("last_sync_at") // ISO datetime
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  syncLogs DmsSyncLog[]
+
+  @@map("dms_sync_configs")
+}
+
+model DmsSyncLog {
+  id           String   @id @default(cuid())
+  configId     String   @map("config_id")
+  syncType     String   @map("sync_type") // manual, scheduled
+  status       String   // running, completed, failed
+  syncDate     String   @map("sync_date") // YYYY-MM-DD - the date range synced
+  incomeCount  Int      @default(0) @map("income_count")
+  expenseCount Int      @default(0) @map("expense_count")
+  matchedCount Int      @default(0) @map("matched_count")
+  newCount     Int      @default(0) @map("new_count")
+  errorMessage String?  @map("error_message")
+  startedAt    DateTime @default(now()) @map("started_at")
+  completedAt  String?  @map("completed_at") // ISO datetime
+
+  config              DmsSyncConfig          @relation(fields: [configId], references: [id], onDelete: Cascade)
+  syncedTransactions  DmsSyncedTransaction[]
+
+  @@map("dms_sync_logs")
+}
+
+model DmsSyncedTransaction {
+  id             String  @id @default(cuid())
+  syncLogId      String  @map("sync_log_id")
+  companyId      String  @map("company_id")
+  dmsType        String  @map("dms_type") // income, expense
+  dmsDate        String  @map("dms_date") // YYYY-MM-DD
+  dmsAccount     String  @map("dms_account") // e.g. "Petty Cash", "Laxmi bank"
+  dmsCategory    String? @map("dms_category") // e.g. "NCM COD", "Petroleum"
+  dmsParticulars String? @map("dms_particulars")
+  dmsAmount      Float   @map("dms_amount")
+  dmsBranch      String  @map("dms_branch")
+  matchStatus    String  @map("match_status") // matched, new, skipped
+  transactionId  String? @map("transaction_id") // linked Transaction in our system
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  syncLog     DmsSyncLog   @relation(fields: [syncLogId], references: [id], onDelete: Cascade)
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@map("dms_synced_transactions")
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/dashboard/sidebar";
+import { MainContent } from "@/components/dashboard/main-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,6 +61,10 @@ export default function CompanySettings({
   const [paymentMethods, setPaymentMethods] = useState<string[]>(defaultPaymentMethods);
   const [newPaymentMethod, setNewPaymentMethod] = useState("");
 
+  // Opening balances by payment method
+  const [paymentMethodBalances, setPaymentMethodBalances] = useState<Record<string, number>>({});
+  const [savingPaymentBalances, setSavingPaymentBalances] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"general" | "categories" | "payment">("general");
 
@@ -70,10 +75,11 @@ export default function CompanySettings({
   async function fetchAll() {
     setLoading(true);
     try {
-      const [companyRes, incomeCatRes, expenseCatRes] = await Promise.all([
+      const [companyRes, incomeCatRes, expenseCatRes, balancesRes] = await Promise.all([
         fetch(`/api/companies/${companyId}`),
         fetch(`/api/companies/${companyId}/categories?type=income`),
         fetch(`/api/companies/${companyId}/categories?type=expense`),
+        fetch(`/api/companies/${companyId}/payment-balances`),
       ]);
 
       if (companyRes.ok) {
@@ -91,6 +97,15 @@ export default function CompanySettings({
       if (expenseCatRes.ok) {
         setExpenseCategories(await expenseCatRes.json());
       }
+
+      if (balancesRes.ok) {
+        const balances = await balancesRes.json();
+        const balanceMap: Record<string, number> = {};
+        balances.forEach((b: { payment_method: string; opening_balance: number }) => {
+          balanceMap[b.payment_method] = b.opening_balance;
+        });
+        setPaymentMethodBalances(balanceMap);
+      }
     } catch {
       toast.error("Failed to load settings");
     } finally {
@@ -99,6 +114,34 @@ export default function CompanySettings({
   }
 
   const [savingBalance, setSavingBalance] = useState(false);
+
+  // Calculate total opening balance from payment method balances
+  const totalOpeningBalance = Object.values(paymentMethodBalances).reduce(
+    (sum, balance) => sum + (balance || 0),
+    0
+  );
+
+  async function savePaymentMethodBalances() {
+    setSavingPaymentBalances(true);
+    try {
+      const balances = paymentMethods.map((method) => ({
+        paymentMethod: method,
+        openingBalance: paymentMethodBalances[method] || 0,
+      }));
+
+      const res = await fetch(`/api/companies/${companyId}/payment-balances`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ balances }),
+      });
+      if (!res.ok) throw new Error();
+      toast.success("Opening balances saved");
+    } catch {
+      toast.error("Failed to save opening balances");
+    } finally {
+      setSavingPaymentBalances(false);
+    }
+  }
 
   async function saveCompanyInfo(e: React.FormEvent) {
     e.preventDefault();
@@ -185,12 +228,12 @@ export default function CompanySettings({
     return (
       <div className="flex min-h-screen bg-gray-50">
         <Sidebar companyId={companyId} companyName="Loading..." />
-        <div className="flex-1 ml-64 p-8">
+        <MainContent className="p-8">
           <div className="space-y-4">
             <div className="h-10 bg-gray-200 rounded animate-pulse w-48" />
             <div className="h-96 bg-gray-200 rounded animate-pulse" />
           </div>
-        </div>
+        </MainContent>
       </div>
     );
   }
@@ -198,7 +241,7 @@ export default function CompanySettings({
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar companyId={companyId} companyName={companyName} />
-      <div className="flex-1 ml-64 overflow-auto">
+      <MainContent className="overflow-auto">
         <div className="p-8">
           {/* Header */}
           <div className="flex items-center gap-3 mb-8">
@@ -291,27 +334,23 @@ export default function CompanySettings({
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-gray-500 mb-4">
-                    Set the opening balance for this company. This is the starting balance when you begin tracking in the system.
+                    The opening balance is the sum of all payment method opening balances. Set them in the Payment Methods tab.
                   </p>
                   <div className="flex gap-3 items-end">
                     <div className="flex-1">
-                      <Label htmlFor="openingBalance">Opening Balance ({currency})</Label>
+                      <Label htmlFor="totalBalance">Total Opening Balance ({currency})</Label>
                       <Input
-                        id="openingBalance"
+                        id="totalBalance"
                         type="number"
                         step="0.01"
-                        value={openingBalance}
-                        onChange={(e) => setOpeningBalance(e.target.value)}
-                        placeholder="0.00"
-                        className="mt-1.5"
+                        value={totalOpeningBalance.toFixed(2)}
+                        readOnly
+                        className="mt-1.5 bg-gray-50 text-gray-600"
                       />
                     </div>
-                    <Button
-                      onClick={saveOpeningBalance}
-                      disabled={savingBalance}
-                    >
-                      {savingBalance ? "Saving..." : "Save Balance"}
-                    </Button>
+                    <div className="text-sm text-gray-500">
+                      Read-only (sum of payment methods)
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -509,10 +548,72 @@ export default function CompanySettings({
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Opening Balances by Payment Method */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Wallet className="h-5 w-5" />
+                    Opening Balances by Payment Method
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-500 mb-6">
+                    Set the opening balance for each payment method. The total will be calculated automatically.
+                  </p>
+
+                  <div className="space-y-4 mb-6">
+                    {paymentMethods.map((method) => (
+                      <div key={method} className="flex items-end gap-4">
+                        <div className="flex-1">
+                          <Label htmlFor={`balance-${method}`} className="text-sm">
+                            {method}
+                          </Label>
+                          <Input
+                            id={`balance-${method}`}
+                            type="number"
+                            step="0.01"
+                            value={paymentMethodBalances[method] || ""}
+                            onChange={(e) =>
+                              setPaymentMethodBalances({
+                                ...paymentMethodBalances,
+                                [method]: parseFloat(e.target.value) || 0,
+                              })
+                            }
+                            placeholder="0.00"
+                            className="mt-1.5"
+                          />
+                        </div>
+                        <div className="text-sm text-gray-500 min-w-fit">{currency}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Summary */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium text-blue-900">
+                        Total Opening Balance
+                      </span>
+                      <span className="text-lg font-bold text-blue-900">
+                        {totalOpeningBalance.toFixed(2)} {currency}
+                      </span>
+                    </div>
+                  </div>
+
+                  <Button
+                    onClick={savePaymentMethodBalances}
+                    disabled={savingPaymentBalances}
+                    className="w-full"
+                  >
+                    {savingPaymentBalances ? "Saving..." : "Save Opening Balances"}
+                  </Button>
+                </CardContent>
+              </Card>
             </div>
           )}
         </div>
-      </div>
+      </MainContent>
     </div>
   );
 }
