@@ -85,6 +85,16 @@ export async function GET(request: Request, { params }: RouteParams) {
     const totalIncome = income._sum.amount || 0;
     const totalExpense = expense._sum.amount || 0;
 
+    // Fetch slack_webhook_url via raw SQL (column not in Prisma schema)
+    let slackWebhookUrl: string | null = null;
+    try {
+      const rows = await prisma.$queryRawUnsafe<Array<{ slack_webhook_url: string | null }>>(
+        `SELECT slack_webhook_url FROM companies WHERE id = ? LIMIT 1`,
+        companyId
+      );
+      slackWebhookUrl = rows?.[0]?.slack_webhook_url ?? null;
+    } catch {}
+
     const companyWithTotals = {
       id: company.id,
       name: company.name,
@@ -92,6 +102,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       fiscalYearStart: company.fiscalYearStart,
       currency: company.currency,
       openingBalance: company.openingBalance || 0,
+      slackWebhookUrl,
       createdAt: company.createdAt,
       updatedAt: company.updatedAt,
       totalIncome,
@@ -133,7 +144,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     }
 
     const body = await request.json();
-    const { name, panVat, fiscalYearStart, currency, openingBalance } = body;
+    const { name, panVat, fiscalYearStart, currency, openingBalance, slackWebhookUrl } = body;
 
     // Build update data (only include provided fields)
     const updateData: Record<string, any> = {};
@@ -147,6 +158,19 @@ export async function PUT(request: Request, { params }: RouteParams) {
       where: { id: companyId },
       data: updateData,
     });
+
+    // Persist slack webhook url via raw SQL (column not in Prisma schema)
+    if (slackWebhookUrl !== undefined) {
+      try {
+        await prisma.$executeRawUnsafe(
+          `UPDATE companies SET slack_webhook_url = ? WHERE id = ?`,
+          slackWebhookUrl || null,
+          companyId
+        );
+      } catch (e) {
+        console.error("Failed to update slack_webhook_url:", e);
+      }
+    }
 
     return NextResponse.json({
       id: company.id,

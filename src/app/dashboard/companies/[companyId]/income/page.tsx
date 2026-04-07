@@ -50,6 +50,7 @@ export default function IncomePage({ params }: PageProps) {
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [categories, setCategories] = useState<Category[]>([]);
   const [companyName, setCompanyName] = useState<string>('');
+  const [companyCurrency, setCompanyCurrency] = useState<string>('NPR');
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -86,7 +87,7 @@ export default function IncomePage({ params }: PageProps) {
         .then((d) => setCommentCounts(d.counts || {}))
         .catch(() => {});
     };
-    const interval = setInterval(tick, 5000);
+    const interval = setInterval(tick, 3000);
     return () => clearInterval(interval);
   }, [income]);
 
@@ -113,6 +114,7 @@ export default function IncomePage({ params }: PageProps) {
       setIncome(list);
       setCategories(categoriesData);
       setCompanyName(companyData.name);
+      setCompanyCurrency(companyData.currency || 'NPR');
       if (list.length > 0) {
         fetch('/api/transactions/comment-counts', {
           method: 'POST',
@@ -543,7 +545,7 @@ export default function IncomePage({ params }: PageProps) {
                             <Badge variant="secondary">{entry.paymentMethod}</Badge>
                           </td>
                           <td className="py-3 px-4 text-right font-semibold text-green-600">
-                            {formatCurrency(entry.amount)}
+                            {formatCurrency(entry.amount, companyCurrency)}
                           </td>
                           <td className="py-3 px-2 text-center">
                             <CommentThread
@@ -588,7 +590,7 @@ export default function IncomePage({ params }: PageProps) {
                           Total ({income.length} entries)
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-green-700 text-lg">
-                          {formatCurrency(income.reduce((sum, entry) => sum + entry.amount, 0))}
+                          {formatCurrency(income.reduce((sum, entry) => sum + entry.amount, 0), companyCurrency)}
                         </td>
                         <td></td>
                         <td></td>

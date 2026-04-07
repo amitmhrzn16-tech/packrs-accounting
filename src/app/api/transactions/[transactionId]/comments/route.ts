@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { randomBytes } from "crypto";
+import { notifySlack } from "@/lib/slack";
 
 function cuid() {
   return "c" + Date.now().toString(36) + randomBytes(8).toString("hex");
@@ -98,6 +99,26 @@ export async function POST(
       session.user.id,
       content
     );
+
+    // Slack notification (best-effort, fire and forget)
+    if (access.companyId) {
+      try {
+        const txnInfo = await prisma.transaction.findUnique({
+          where: { id: params.transactionId },
+          select: { particulars: true, type: true, amount: true },
+        });
+        const company = await prisma.company.findUnique({
+          where: { id: access.companyId },
+          select: { name: true },
+        });
+        const author = session.user.name || "Someone";
+        const txnLabel = txnInfo
+          ? `${txnInfo.type === "income" ? "Income" : "Expense"} — ${txnInfo.particulars}`
+          : `transaction ${params.transactionId}`;
+        const text = `*${author}* commented on _${txnLabel}_ in *${company?.name || "a company"}*:\n> ${content}`;
+        notifySlack(access.companyId, text).catch(() => {});
+      } catch {}
+    }
 
     return NextResponse.json(
       {

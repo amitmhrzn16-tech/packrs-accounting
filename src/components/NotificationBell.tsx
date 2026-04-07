@@ -37,17 +37,56 @@ export default function NotificationBell() {
     } catch {}
   }, []);
 
+  // Request browser notification permission once
+  useEffect(() => {
+    try {
+      if (
+        typeof window !== "undefined" &&
+        "Notification" in window &&
+        Notification.permission === "default"
+      ) {
+        Notification.requestPermission().catch(() => {});
+      }
+    } catch {}
+  }, []);
+
   // Poll for all recent notifications
   useEffect(() => {
     let cancelled = false;
+    const seenIds = new Set<string>();
 
     const load = async () => {
       try {
-        const res = await fetch("/api/notifications/comments");
+        const res = await fetch("/api/notifications/comments", {
+          cache: "no-store",
+        });
         if (!res.ok) return;
         const data = await res.json();
         const list: CommentNotification[] = data.notifications || [];
         if (cancelled) return;
+
+        // Detect brand-new notifications since last poll for desktop popup
+        const fresh = list.filter((n) => !seenIds.has(n.id));
+        list.forEach((n) => seenIds.add(n.id));
+
+        // Only fire desktop notification on subsequent polls (not first load)
+        const isFirstLoad = seenIds.size === list.length && fresh.length === list.length;
+        if (!isFirstLoad && fresh.length > 0) {
+          try {
+            if (
+              typeof window !== "undefined" &&
+              "Notification" in window &&
+              Notification.permission === "granted"
+            ) {
+              const top = fresh[0];
+              new Notification(`${top.userName} commented`, {
+                body: `${top.content.slice(0, 120)} — ${top.companyName}`,
+                tag: top.id,
+              });
+            }
+          } catch {}
+        }
+
         setAll(list);
         // Unread = created after lastSeen
         const unread = lastSeen
@@ -58,7 +97,7 @@ export default function NotificationBell() {
     };
 
     load();
-    const interval = setInterval(load, 8000);
+    const interval = setInterval(load, 4000);
     return () => {
       cancelled = true;
       clearInterval(interval);

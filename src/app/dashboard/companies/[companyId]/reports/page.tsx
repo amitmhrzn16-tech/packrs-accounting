@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { IncomeExpenseChart } from '@/components/charts/income-expense-chart';
 import { CategoryPieChart } from '@/components/charts/category-pie-chart';
+import { CategoryBarChart } from '@/components/charts/category-bar-chart';
 import { BalanceLineChart } from '@/components/charts/balance-line-chart';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import {
@@ -51,6 +52,7 @@ interface ReportData {
 export default function ReportsPage({ params }: { params: { companyId: string } }) {
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [companyName, setCompanyName] = useState('');
+  const [companyCurrency, setCompanyCurrency] = useState('NPR');
   const [loading, setLoading] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -116,6 +118,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
       if (res.ok) {
         const data = await res.json();
         setCompanyName(data.name);
+        setCompanyCurrency(data.currency || 'NPR');
       }
     } catch (e) {
       console.error(e);
@@ -285,20 +288,20 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
               <Card className="border-l-4 border-l-indigo-500">
                 <CardContent className="pt-4 pb-4 px-4">
                   <p className="text-xs text-gray-500 uppercase font-medium">Opening Balance</p>
-                  <p className="text-xl font-bold text-indigo-600 mt-1">{formatCurrency(reportData.openingBalance || 0)}</p>
+                  <p className="text-xl font-bold text-indigo-600 mt-1">{formatCurrency(reportData.openingBalance || 0, companyCurrency)}</p>
                 </CardContent>
               </Card>
               <Card className="border-l-4 border-l-green-500">
                 <CardContent className="pt-4 pb-4 px-4">
                   <p className="text-xs text-gray-500 uppercase font-medium">Total Income</p>
-                  <p className="text-xl font-bold text-green-600 mt-1">{formatCurrency(reportData.totalIncome)}</p>
+                  <p className="text-xl font-bold text-green-600 mt-1">{formatCurrency(reportData.totalIncome, companyCurrency)}</p>
                   <p className="text-xs text-gray-400 mt-1">{reportData.totalIncomeCount} entries</p>
                 </CardContent>
               </Card>
               <Card className="border-l-4 border-l-red-500">
                 <CardContent className="pt-4 pb-4 px-4">
                   <p className="text-xs text-gray-500 uppercase font-medium">Total Expense</p>
-                  <p className="text-xl font-bold text-red-600 mt-1">{formatCurrency(reportData.totalExpense)}</p>
+                  <p className="text-xl font-bold text-red-600 mt-1">{formatCurrency(reportData.totalExpense, companyCurrency)}</p>
                   <p className="text-xs text-gray-400 mt-1">{reportData.totalExpenseCount} entries</p>
                 </CardContent>
               </Card>
@@ -306,7 +309,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
                 <CardContent className="pt-4 pb-4 px-4">
                   <p className="text-xs text-gray-500 uppercase font-medium">Net Balance</p>
                   <p className={`text-xl font-bold mt-1 ${reportData.netBalance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                    {formatCurrency(reportData.netBalance)}
+                    {formatCurrency(reportData.netBalance, companyCurrency)}
                   </p>
                 </CardContent>
               </Card>
@@ -374,7 +377,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
                         {reportData.topIncomeCategories.map((cat, i) => (
                           <div key={i} className="flex justify-between items-center text-sm">
                             <span className="text-gray-700">{cat.categoryName}</span>
-                            <span className="font-semibold text-green-600">{formatCurrency(cat.amount)}</span>
+                            <span className="font-semibold text-green-600">{formatCurrency(cat.amount, companyCurrency)}</span>
                           </div>
                         ))}
                       </div>
@@ -401,7 +404,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
                         {reportData.topExpenseCategories.map((cat, i) => (
                           <div key={i} className="flex justify-between items-center text-sm">
                             <span className="text-gray-700">{cat.categoryName}</span>
-                            <span className="font-semibold text-red-600">{formatCurrency(cat.amount)}</span>
+                            <span className="font-semibold text-red-600">{formatCurrency(cat.amount, companyCurrency)}</span>
                           </div>
                         ))}
                       </div>
@@ -412,6 +415,74 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
                 </CardContent>
               </Card>
             </div>
+
+            {/* By Category — combined Pie + Bar charts */}
+            {(incomePieData.length > 0 || expensePieData.length > 0) && (
+              <Card className="mb-8">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-blue-500" />
+                    By Category
+                  </CardTitle>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Pie and bar visualizations of income & expense categories.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {/* Income */}
+                  {incomePieData.length > 0 && (
+                    <div className="mb-10">
+                      <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-green-500" />
+                        Income by Category
+                      </h3>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div>
+                          <CategoryPieChart data={incomePieData} />
+                        </div>
+                        <div>
+                          <CategoryBarChart
+                            data={incomePieData.map((d) => ({
+                              name: d.name,
+                              value: d.value,
+                              color: d.color,
+                            }))}
+                            barColor="#10b981"
+                            formatValue={(v) => formatCurrency(v, companyCurrency)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Expense */}
+                  {expensePieData.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        <TrendingDown className="h-4 w-4 text-red-500" />
+                        Expenses by Category
+                      </h3>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div>
+                          <CategoryPieChart data={expensePieData} />
+                        </div>
+                        <div>
+                          <CategoryBarChart
+                            data={expensePieData.map((d) => ({
+                              name: d.name,
+                              value: d.value,
+                              color: d.color,
+                            }))}
+                            barColor="#ef4444"
+                            formatValue={(v) => formatCurrency(v, companyCurrency)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Payment Method Breakdown */}
             {reportData.paymentMethods.length > 0 && (
@@ -437,7 +508,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
                           <tr key={i} className="border-b hover:bg-gray-50">
                             <td className="py-3 px-4 capitalize">{pm.method}</td>
                             <td className="py-3 px-4 text-right">{pm.count}</td>
-                            <td className="py-3 px-4 text-right font-semibold">{formatCurrency(pm.total)}</td>
+                            <td className="py-3 px-4 text-right font-semibold">{formatCurrency(pm.total, companyCurrency)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -493,7 +564,7 @@ export default function ReportsPage({ params }: { params: { companyId: string } 
                             </td>
                             <td className="py-3 px-4 text-gray-600 capitalize">{txn.paymentMethod || '—'}</td>
                             <td className={`py-3 px-4 text-right font-semibold ${txn.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                              {txn.type === 'income' ? '+' : '-'}{formatCurrency(txn.amount)}
+                              {txn.type === 'income' ? '+' : '-'}{formatCurrency(txn.amount, companyCurrency)}
                             </td>
                           </tr>
                         ))

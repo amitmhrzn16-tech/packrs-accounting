@@ -1,6 +1,8 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { notifySlack } from "@/lib/slack";
+import { formatCurrency } from "@/lib/utils";
 
 async function verifyAccess(userId: string, companyId: string) {
   return prisma.companyUser.findFirst({
@@ -136,6 +138,26 @@ export async function POST(
         newValues: JSON.stringify(transaction),
       },
     });
+
+    // Slack notification (best-effort, fire and forget)
+    try {
+      const company = await prisma.company.findUnique({
+        where: { id: params.companyId },
+        select: { name: true, currency: true },
+      });
+      const author = session.user.name || "Someone";
+      const emoji = type === "income" ? ":moneybag:" : ":money_with_wings:";
+      const label = type === "income" ? "Income" : "Expense";
+      const formatted = formatCurrency(parseFloat(amount), company?.currency || "NPR");
+      const text =
+        `${emoji} New *${label}* added to *${company?.name || "company"}* by *${author}*\n` +
+        `Amount: *${formatted}*\n` +
+        `Description: ${particulars || "—"}\n` +
+        `Category: ${transaction.category?.name || "—"}\n` +
+        `Payment: ${paymentMethod || "—"}\n` +
+        `Date: ${date}`;
+      notifySlack(params.companyId, text).catch(() => {});
+    } catch {}
 
     return NextResponse.json(transaction, { status: 201 });
   } catch (error) {
