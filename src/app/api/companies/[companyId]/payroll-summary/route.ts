@@ -95,36 +95,49 @@ export async function GET(
        GROUP BY category ORDER BY total DESC`
     );
 
+    // Convert all BigInt values from Prisma/SQLite to plain numbers for JSON serialization
     return NextResponse.json({
       staffSummary: staffSummary.map((s: any) => ({
         role: s.role,
-        count: s.count,
-        totalSalary: s.total_salary,
+        count: Number(s.count),
+        totalSalary: Number(s.total_salary || 0),
       })),
       salary: {
-        ...(salarySummary[0] || {}),
+        total_payments: Number(salarySummary[0]?.total_payments || 0),
+        gross_salary: Number(salarySummary[0]?.gross_salary || 0),
+        total_deductions: Number(salarySummary[0]?.total_deductions || 0),
+        total_bonus: Number(salarySummary[0]?.total_bonus || 0),
+        net_paid: Number(salarySummary[0]?.net_paid || 0),
         byMethod: salaryByMethod.map((m: any) => ({
           method: m.payment_method,
-          count: m.count,
-          total: m.total,
+          count: Number(m.count),
+          total: Number(m.total),
         })),
-        trend: salaryTrend.reverse(),
+        trend: salaryTrend.reverse().map((t: any) => ({
+          month: t.month,
+          total: Number(t.total),
+          staff_count: Number(t.staff_count),
+        })),
       },
       advances: {
-        ...(advanceSummary[0] || {}),
+        total_advances: Number(advanceSummary[0]?.total_advances || 0),
+        total_given: Number(advanceSummary[0]?.total_given || 0),
+        total_outstanding: Number(advanceSummary[0]?.total_outstanding || 0),
+        total_recovered: Number(advanceSummary[0]?.total_recovered || 0),
         topHolders: topAdvanceHolders.map((h: any) => ({
           name: h.name,
           role: h.role,
-          totalDue: h.total_due,
-          advanceCount: h.advance_count,
+          totalDue: Number(h.total_due),
+          advanceCount: Number(h.advance_count),
         })),
       },
       dailyCash: {
-        ...(cashSummary[0] || {}),
+        total_entries: Number(cashSummary[0]?.total_entries || 0),
+        total_amount: Number(cashSummary[0]?.total_amount || 0),
         byCategory: cashByCategory.map((c: any) => ({
           category: c.category,
-          count: c.count,
-          total: c.total,
+          count: Number(c.count),
+          total: Number(c.total),
         })),
       },
     });

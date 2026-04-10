@@ -70,20 +70,38 @@ export async function GET(
        FROM daily_cash_payments WHERE ${summaryWhere} AND status = 'approved'`
     );
 
+    // Convert BigInt values from Prisma/SQLite to plain numbers for JSON serialization
+    const safeCategorySummary = categorySummary.map((cs: any) => ({
+      category: cs.category,
+      count: Number(cs.count),
+      total: Number(cs.total),
+    }));
+    const rawSummary = totalSummary[0] || {};
+    const safeSummary = {
+      total_count: Number(rawSummary.total_count || 0),
+      total_amount: Number(rawSummary.total_amount || 0),
+    };
+
     return NextResponse.json({
       payments: payments.map((p: any) => ({
-        ...p,
-        staffName: p.staff_name,
-        staffRole: p.staff_role,
-        createdByName: p.created_by_name,
-        createdAt: p.created_at,
+        id: p.id,
+        staff_id: p.staff_id,
+        staffName: p.staff_name || "",
+        staffRole: p.staff_role || "",
+        date: p.date,
+        amount: Number(p.amount),
+        category: p.category,
+        description: p.description,
         receiptNo: p.receipt_no,
         approvedBy: p.approved_by,
+        status: p.status,
         paymentMethod: p.payment_method || "cash",
         fonepayRef: p.fonepay_ref || "",
+        createdByName: p.created_by_name || "",
+        createdAt: p.created_at,
       })),
-      categorySummary,
-      summary: totalSummary[0] || { total_count: 0, total_amount: 0 },
+      categorySummary: safeCategorySummary,
+      summary: safeSummary,
     });
   } catch (error) {
     console.error("GET /daily-cash error:", error);

@@ -48,16 +48,23 @@ export async function GET(
           `SELECT COALESCE(SUM(due_amount), 0) as total_due FROM advance_payments WHERE staff_id = '${s.id}' AND status != 'recovered'`
         );
         return {
-          ...s,
+          id: s.id,
+          name: s.name,
+          phone: s.phone,
+          email: s.email,
+          role: s.role,
+          designation: s.designation,
+          address: s.address,
+          notes: s.notes,
           isActive: s.is_active === 1,
-          salaryAmount: s.salary_amount,
+          salaryAmount: Number(s.salary_amount || 0),
           joinDate: s.join_date,
           bankAccount: s.bank_account,
           bankName: s.bank_name,
           emergencyContact: s.emergency_contact,
           createdAt: s.created_at,
           updatedAt: s.updated_at,
-          totalAdvanceDue: advDue[0]?.total_due || 0,
+          totalAdvanceDue: Number(advDue[0]?.total_due || 0),
         };
       })
     );

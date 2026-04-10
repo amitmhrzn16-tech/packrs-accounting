@@ -43,11 +43,12 @@ export async function POST(
     }
 
     const adv = advance[0];
-    if (amount > adv.due_amount) {
-      return NextResponse.json({ error: `Recovery amount (${amount}) exceeds due amount (${adv.due_amount})` }, { status: 400 });
+    const currentDue = Number(adv.due_amount);
+    if (amount > currentDue) {
+      return NextResponse.json({ error: `Recovery amount (${amount}) exceeds due amount (${currentDue})` }, { status: 400 });
     }
 
-    const newDue = adv.due_amount - amount;
+    const newDue = currentDue - amount;
     const newStatus = newDue <= 0 ? "recovered" : "partially_recovered";
     const now = new Date().toISOString();
 

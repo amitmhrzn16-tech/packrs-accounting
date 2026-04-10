@@ -73,12 +73,12 @@ export async function GET(
           staff_id: a.staff_id,
           staffName: a.staff_name || "Unknown",
           staffRole: a.staff_role || "staff",
-          amount: a.amount,
+          amount: Number(a.amount),
           paymentDate: a.payment_date,
           paymentMethod: a.payment_method,
           referenceNo: a.reference_no,
           reason: a.reason,
-          dueAmount: a.due_amount,
+          dueAmount: Number(a.due_amount),
           status: a.status,
           recoveryDeadline: a.recovery_deadline,
           notes: a.notes,
@@ -87,7 +87,7 @@ export async function GET(
           createdAt: a.created_at,
           recoveries: recoveries.map((r: any) => ({
             id: r.id,
-            amount: r.amount,
+            amount: Number(r.amount),
             recoveryDate: r.recovery_date,
             recoveryMethod: r.recovery_method,
             notes: r.notes,
@@ -107,9 +107,18 @@ export async function GET(
       params.companyId
     );
 
+    // Convert BigInt values from Prisma/SQLite to plain numbers for JSON serialization
+    const rawSummary = summary[0] || {};
+    const safeSummary = {
+      total_advances: Number(rawSummary.total_advances || 0),
+      total_given: Number(rawSummary.total_given || 0),
+      total_outstanding: Number(rawSummary.total_outstanding || 0),
+      total_recovered: Number(rawSummary.total_recovered || 0),
+    };
+
     return NextResponse.json({
       advances: advancesWithRecoveries,
-      summary: summary[0] || { total_advances: 0, total_given: 0, total_outstanding: 0, total_recovered: 0 },
+      summary: safeSummary,
     });
   } catch (error) {
     console.error("GET /advance-payments error:", error);

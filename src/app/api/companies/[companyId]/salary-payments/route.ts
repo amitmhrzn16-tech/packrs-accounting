@@ -66,28 +66,37 @@ export async function GET(
       ...summaryValues
     );
 
+    // Convert BigInt values from Prisma/SQLite to plain numbers for JSON serialization
+    const rawSummary = summary[0] || {};
+    const safeSummary = {
+      total_count: Number(rawSummary.total_count || 0),
+      total_paid: Number(rawSummary.total_paid || 0),
+      total_deductions: Number(rawSummary.total_deductions || 0),
+      total_bonus: Number(rawSummary.total_bonus || 0),
+    };
+
     return NextResponse.json({
       payments: payments.map((p: any) => ({
         id: p.id,
         staff_id: p.staff_id,
         staffName: p.staff_name || "Unknown",
         staffRole: p.staff_role || "staff",
-        agreedSalary: p.agreed_salary || 0,
-        amount: p.amount,
+        agreedSalary: Number(p.agreed_salary || 0),
+        amount: Number(p.amount),
         month: p.month,
         paymentDate: p.payment_date,
         paymentMethod: p.payment_method,
         referenceNo: p.reference_no,
-        deductions: p.deductions || 0,
-        bonus: p.bonus || 0,
-        netAmount: p.net_amount,
+        deductions: Number(p.deductions || 0),
+        bonus: Number(p.bonus || 0),
+        netAmount: Number(p.net_amount),
         status: p.status,
         notes: p.notes,
         createdByName: p.created_by_name || "System",
         createdBy: p.created_by,
         createdAt: p.created_at,
       })),
-      summary: summary[0] || { total_count: 0, total_paid: 0, total_deductions: 0, total_bonus: 0 },
+      summary: safeSummary,
     });
   } catch (error) {
     console.error("GET /salary-payments error:", error);
@@ -152,8 +161,9 @@ export async function POST(
       let remaining = grossAmount * 0.25; // max 25% of gross for advance recovery
       for (const adv of pendingAdvances) {
         if (remaining <= 0) break;
-        const recoveryAmount = Math.min(adv.due_amount, remaining);
-        const newDue = adv.due_amount - recoveryAmount;
+        const advDue = Number(adv.due_amount);
+        const recoveryAmount = Math.min(advDue, remaining);
+        const newDue = advDue - recoveryAmount;
         const newStatus = newDue <= 0.01 ? "recovered" : "partially_recovered";
 
         const recId = "ar" + Math.random().toString(36).slice(2) + Date.now().toString(36);
