@@ -84,12 +84,14 @@ export default function CompanyDashboard({
         setLoading(true);
         setError(null);
 
-        const [reportsRes, companyRes, staffRes, salaryRes, dailyCashRes] = await Promise.all([
-          fetch(`/api/companies/${params.companyId}/reports`),
-          fetch(`/api/companies/${params.companyId}`),
-          fetch(`/api/companies/${params.companyId}/staff?isActive=true`).catch(() => null),
-          fetch(`/api/companies/${params.companyId}/salary-payments?month=${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`).catch(() => null),
-          fetch(`/api/companies/${params.companyId}/daily-cash?date=${new Date().toISOString().split("T")[0]}`).catch(() => null),
+        const _t = Date.now();
+        const [reportsRes, companyRes, staffRes, salaryRes, dailyCashRes, advanceRes] = await Promise.all([
+          fetch(`/api/companies/${params.companyId}/reports?_t=${_t}`, { cache: "no-store" }),
+          fetch(`/api/companies/${params.companyId}?_t=${_t}`, { cache: "no-store" }),
+          fetch(`/api/companies/${params.companyId}/staff?isActive=true&_t=${_t}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/companies/${params.companyId}/salary-payments?month=${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}&_t=${_t}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/companies/${params.companyId}/daily-cash?date=${new Date().toISOString().split("T")[0]}&_t=${_t}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/companies/${params.companyId}/advance-payments?_t=${_t}`, { cache: "no-store" }).catch(() => null),
         ]);
 
         if (!reportsRes.ok || !companyRes.ok) {
@@ -107,14 +109,15 @@ export default function CompanyDashboard({
           const staffData = staffRes?.ok ? await staffRes.json() : { staff: [] };
           const salaryData = salaryRes?.ok ? await salaryRes.json() : { summary: { total_paid: 0 } };
           const cashData = dailyCashRes?.ok ? await dailyCashRes.json() : { summary: { total_amount: 0 } };
+          const advanceData = advanceRes?.ok ? await advanceRes.json() : { summary: { total_outstanding: 0 } };
           const staffList = staffData.staff || [];
           setPayrollData({
             staffCount: staffList.length,
             riderCount: staffList.filter((s: any) => s.role === "rider").length,
             totalPayroll: staffList.reduce((sum: number, s: any) => sum + (s.salaryAmount || 0), 0),
-            totalAdvanceDue: staffList.reduce((sum: number, s: any) => sum + (s.totalAdvanceDue || 0), 0),
-            recentSalaries: salaryData.summary?.total_paid || 0,
-            dailyCashToday: cashData.summary?.total_amount || 0,
+            totalAdvanceDue: Number(advanceData.summary?.total_outstanding) || 0,
+            recentSalaries: Number(salaryData.summary?.total_paid) || 0,
+            dailyCashToday: Number(cashData.summary?.total_amount) || 0,
           });
         } catch {}
       } catch (err) {
