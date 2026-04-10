@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Sidebar } from "@/components/dashboard/sidebar";
+import { MainContent } from "@/components/dashboard/main-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,14 +64,18 @@ const RECOVERY_METHODS = [
   { value: "salary_deduction", label: "Salary Deduction" },
 ];
 
-export default function AdvancesPage() {
-  const params = useParams();
-  const companyId = params.companyId as string;
+interface PageProps {
+  params: { companyId: string };
+}
+
+export default function AdvancesPage({ params }: PageProps) {
+  const companyId = params.companyId;
 
   const [advances, setAdvances] = useState<Advance[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [companyCurrency, setCompanyCurrency] = useState("NPR");
+  const [companyName, setCompanyName] = useState("");
   const [summary, setSummary] = useState({ total_advances: 0, total_given: 0, total_outstanding: 0, total_recovered: 0 });
   const [filterStaff, setFilterStaff] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -106,6 +111,7 @@ export default function AdvancesPage() {
       const res = await fetch(`/api/companies/${companyId}`);
       const data = await res.json();
       setCompanyCurrency(data.currency || "NPR");
+      setCompanyName(data.name || "");
     } catch {}
   }
 
@@ -209,6 +215,10 @@ export default function AdvancesPage() {
   }
 
   return (
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar companyId={companyId} companyName={companyName} />
+      <MainContent className="overflow-auto">
+        <div className="p-8">
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -512,6 +522,9 @@ export default function AdvancesPage() {
           </div>
         </div>
       )}
+    </div>
+        </div>
+      </MainContent>
     </div>
   );
 }

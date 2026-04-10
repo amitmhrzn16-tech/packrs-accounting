@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Sidebar } from "@/components/dashboard/sidebar";
+import { MainContent } from "@/components/dashboard/main-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,14 +47,18 @@ const PAYMENT_METHODS = [
   { value: "cheque", label: "Cheque" },
 ];
 
-export default function SalaryPage() {
-  const params = useParams();
-  const companyId = params.companyId as string;
+interface PageProps {
+  params: { companyId: string };
+}
+
+export default function SalaryPage({ params }: PageProps) {
+  const companyId = params.companyId;
 
   const [payments, setPayments] = useState<SalaryPayment[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [companyCurrency, setCompanyCurrency] = useState("NPR");
+  const [companyName, setCompanyName] = useState("");
   const [summary, setSummary] = useState({ total_count: 0, total_paid: 0, total_deductions: 0, total_bonus: 0 });
   const [filterMonth, setFilterMonth] = useState(() => {
     const d = new Date();
@@ -85,6 +90,7 @@ export default function SalaryPage() {
       const res = await fetch(`/api/companies/${companyId}`);
       const data = await res.json();
       setCompanyCurrency(data.currency || "NPR");
+      setCompanyName(data.name || "");
     } catch {}
   }
 
@@ -189,6 +195,10 @@ export default function SalaryPage() {
   const unpaidStaff = staff.filter((s) => !paidStaffIds.has(s.id) && s.salaryAmount > 0);
 
   return (
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar companyId={companyId} companyName={companyName} />
+      <MainContent className="overflow-auto">
+        <div className="p-8">
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -512,6 +522,9 @@ export default function SalaryPage() {
           </div>
         </div>
       )}
+    </div>
+        </div>
+      </MainContent>
     </div>
   );
 }

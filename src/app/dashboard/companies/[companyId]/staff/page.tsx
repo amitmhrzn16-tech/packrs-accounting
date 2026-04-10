@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Sidebar } from "@/components/dashboard/sidebar";
+import { MainContent } from "@/components/dashboard/main-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,13 +40,17 @@ const STAFF_ROLES = [
   { value: "helper", label: "Helper", icon: "🤝" },
 ];
 
-export default function StaffPage() {
-  const params = useParams();
-  const companyId = params.companyId as string;
+interface PageProps {
+  params: { companyId: string };
+}
+
+export default function StaffPage({ params }: PageProps) {
+  const companyId = params.companyId;
 
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [companyCurrency, setCompanyCurrency] = useState("NPR");
+  const [companyName, setCompanyName] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [showInactive, setShowInactive] = useState(false);
@@ -70,6 +75,7 @@ export default function StaffPage() {
       const res = await fetch(`/api/companies/${companyId}`);
       const data = await res.json();
       setCompanyCurrency(data.currency || "NPR");
+      setCompanyName(data.name || "");
     } catch {}
   }
 
@@ -159,6 +165,10 @@ export default function StaffPage() {
   const officeCount = staff.filter((s) => s.role !== "rider").length;
 
   return (
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar companyId={companyId} companyName={companyName} />
+      <MainContent className="overflow-auto">
+        <div className="p-8">
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -429,6 +439,9 @@ export default function StaffPage() {
           </div>
         </div>
       )}
+    </div>
+        </div>
+      </MainContent>
     </div>
   );
 }
