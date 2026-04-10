@@ -13,6 +13,7 @@ import {
   Plus, AlertTriangle, CheckCircle, Clock, DollarSign, ArrowDownRight,
   X, ChevronDown, ChevronUp, ShieldAlert, Send
 } from "lucide-react";
+import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
 
 interface Staff {
   id: string;
@@ -47,6 +48,7 @@ interface Advance {
   notes?: string;
   createdByName: string;
   createdAt: string;
+  attachmentUrl?: string;
   recoveries: Recovery[];
 }
 
@@ -87,8 +89,9 @@ export default function AdvancesPage({ params }: PageProps) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     staffId: "", amount: "", paymentDate: "", paymentMethod: "cash",
-    referenceNo: "", reason: "", recoveryDeadline: "", notes: "",
+    referenceNo: "", reason: "", recoveryDeadline: "", notes: "", attachmentUrl: "",
   });
+  const [viewAttachment, setViewAttachment] = useState("");
 
   // Confirmation step
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -153,7 +156,7 @@ export default function AdvancesPage({ params }: PageProps) {
     const today = new Date().toISOString().split("T")[0];
     setForm({
       staffId: "", amount: "", paymentDate: today, paymentMethod: "cash",
-      referenceNo: "", reason: "", recoveryDeadline: "", notes: "",
+      referenceNo: "", reason: "", recoveryDeadline: "", notes: "", attachmentUrl: "",
     });
     setShowConfirmation(false);
     setNeedsAdminApproval(false);
@@ -246,6 +249,7 @@ export default function AdvancesPage({ params }: PageProps) {
           reason: form.reason,
           recoveryDeadline: form.recoveryDeadline,
           notes: form.notes,
+          attachmentUrl: form.attachmentUrl || undefined,
         }),
       });
       if (res.ok) {
@@ -480,7 +484,14 @@ export default function AdvancesPage({ params }: PageProps) {
                     </div>
                   </div>
 
-                  {a.reason && <p className="mt-1 text-sm text-muted-foreground">Reason: {a.reason}</p>}
+                  <div className="mt-1 flex items-center gap-2">
+                    {a.reason && <span className="text-sm text-muted-foreground">Reason: {a.reason}</span>}
+                    {a.attachmentUrl && (
+                      <button onClick={() => setViewAttachment(a.attachmentUrl!)}>
+                        <AttachmentBadge url={a.attachmentUrl} small />
+                      </button>
+                    )}
+                  </div>
                   {a.recoveryDeadline && (
                     <p className="text-xs text-orange-500">Deadline: {formatDate(a.recoveryDeadline)}</p>
                   )}
@@ -609,6 +620,13 @@ export default function AdvancesPage({ params }: PageProps) {
                 <Label>Reason</Label>
                 <Input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Medical emergency, personal need..." />
               </div>
+
+              <FileUpload
+                label="Attach Receipt / Document"
+                currentUrl={form.attachmentUrl || undefined}
+                onFileUploaded={(url) => setForm({ ...form, attachmentUrl: url })}
+                onClear={() => setForm({ ...form, attachmentUrl: "" })}
+              />
 
               <div>
                 <Label>Notes</Label>
@@ -796,6 +814,10 @@ export default function AdvancesPage({ params }: PageProps) {
             </div>
           </div>
         </div>
+      )}
+      {/* Attachment Viewer */}
+      {viewAttachment && (
+        <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
       )}
     </div>
         </div>

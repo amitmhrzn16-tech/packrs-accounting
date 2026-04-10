@@ -13,6 +13,7 @@ import {
   Plus, DollarSign, Calendar, Users, TrendingDown, X, CheckCircle,
   AlertTriangle, Settings, Minus, PlusCircle
 } from "lucide-react";
+import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
 
 interface Staff {
   id: string;
@@ -39,6 +40,7 @@ interface SalaryPayment {
   netAmount: number;
   status: string;
   notes?: string;
+  attachmentUrl?: string;
   createdByName: string;
 }
 
@@ -87,9 +89,10 @@ export default function SalaryPage({ params }: PageProps) {
   const [showBulkForm, setShowBulkForm] = useState(false);
   const [form, setForm] = useState({
     staffId: "", amount: "", month: "", paymentDate: "",
-    paymentMethod: "cash", referenceNo: "", notes: "",
+    paymentMethod: "cash", referenceNo: "", notes: "", attachmentUrl: "",
     autoDeductAdvance: true,
   });
+  const [viewAttachment, setViewAttachment] = useState("");
   // Dynamic fields state: { fieldName: "amount" }
   const [customDeductions, setCustomDeductions] = useState<Record<string, string>>({});
   const [customBonuses, setCustomBonuses] = useState<Record<string, string>>({});
@@ -155,7 +158,7 @@ export default function SalaryPage({ params }: PageProps) {
     setForm({
       staffId: s?.id || "", amount: s ? String(s.salaryAmount) : "",
       month: filterMonth, paymentDate: today, paymentMethod: "cash",
-      referenceNo: "", notes: "",
+      referenceNo: "", notes: "", attachmentUrl: "",
       autoDeductAdvance: true,
     });
     // Initialize custom fields with defaults
@@ -194,6 +197,7 @@ export default function SalaryPage({ params }: PageProps) {
           deductions: 0, // base deductions set to 0 — all via customDeductions
           bonus: totalCustomBonus,
           customDeductions: allCustomDed,
+          attachmentUrl: form.attachmentUrl || undefined,
         }),
       });
       if (res.ok) {
@@ -382,6 +386,7 @@ export default function SalaryPage({ params }: PageProps) {
                     <th className="pb-2 pr-4 text-right">Net Paid</th>
                     <th className="pb-2 pr-4">Method</th>
                     <th className="pb-2 pr-4">Date</th>
+                    <th className="pb-2 pr-2">File</th>
                     <th className="pb-2">Status</th>
                   </tr>
                 </thead>
@@ -405,6 +410,13 @@ export default function SalaryPage({ params }: PageProps) {
                         <Badge variant="outline" className="text-xs">{p.paymentMethod}</Badge>
                       </td>
                       <td className="py-2 pr-4 text-xs">{formatDate(p.paymentDate)}</td>
+                      <td className="py-2 pr-2">
+                        {p.attachmentUrl && (
+                          <button onClick={() => setViewAttachment(p.attachmentUrl!)}>
+                            <AttachmentBadge url={p.attachmentUrl} small />
+                          </button>
+                        )}
+                      </td>
                       <td className="py-2">
                         <Badge className={p.status === "paid" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}>
                           {p.status}
@@ -628,6 +640,13 @@ export default function SalaryPage({ params }: PageProps) {
                 <Input value={form.referenceNo} onChange={(e) => setForm({ ...form, referenceNo: e.target.value })} placeholder="Optional" />
               </div>
 
+              <FileUpload
+                label="Attach Salary Slip / Document"
+                currentUrl={form.attachmentUrl || undefined}
+                onFileUploaded={(url) => setForm({ ...form, attachmentUrl: url })}
+                onClear={() => setForm({ ...form, attachmentUrl: "" })}
+              />
+
               <div>
                 <Label>Notes</Label>
                 <textarea
@@ -682,6 +701,10 @@ export default function SalaryPage({ params }: PageProps) {
             </div>
           </div>
         </div>
+      )}
+      {/* Attachment Viewer */}
+      {viewAttachment && (
+        <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
       )}
     </div>
         </div>

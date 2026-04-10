@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, TrendingDown, Calendar, Paperclip, X, Trash2, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { AttachmentBadge, AttachmentViewer } from '@/components/ui/file-upload';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { MainContent } from "@/components/dashboard/main-content";
 import CommentThread from '@/components/CommentThread';
@@ -24,6 +25,7 @@ interface Expense {
   paymentMethod: string;
   amount: number;
   referenceNo?: string;
+  attachmentUrl?: string;
 }
 
 interface Category {
@@ -48,6 +50,7 @@ export default function ExpensesPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
+  const [viewAttachment, setViewAttachment] = useState("");
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -361,6 +364,7 @@ export default function ExpensesPage() {
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Payment Method</th>
                         <th className="text-right py-3 px-4 font-semibold text-gray-700">Amount</th>
+                        <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">File</th>
                         <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">💬</th>
                         <th className="py-3 px-2 w-10"></th>
                       </tr>
@@ -378,6 +382,13 @@ export default function ExpensesPage() {
                           <td className="py-3 px-4"><Badge variant="outline">{expense.category?.name || '—'}</Badge></td>
                           <td className="py-3 px-4 text-gray-900"><Badge variant="secondary">{expense.paymentMethod}</Badge></td>
                           <td className="py-3 px-4 text-right text-red-600 font-semibold">{formatCurrency(expense.amount, companyCurrency)}</td>
+                          <td className="py-3 px-2 text-center">
+                            {expense.attachmentUrl && (
+                              <button onClick={() => setViewAttachment(expense.attachmentUrl!)} title="View attachment">
+                                <AttachmentBadge url={expense.attachmentUrl} small />
+                              </button>
+                            )}
+                          </td>
                           <td className="py-3 px-2 text-center">
                             <CommentThread
                               transactionId={expense.id}
@@ -404,7 +415,7 @@ export default function ExpensesPage() {
                     </tbody>
                     <tfoot>
                       <tr className="bg-red-50 border-t-2 border-red-200">
-                        <td colSpan={5} className="py-3 px-4 font-bold text-gray-900 text-right">Total ({expenses.length} entries)</td>
+                        <td colSpan={6} className="py-3 px-4 font-bold text-gray-900 text-right">Total ({expenses.length} entries)</td>
                         <td className="py-3 px-4 text-right font-bold text-red-700 text-lg">{formatCurrency(expenses.reduce((sum, entry) => sum + entry.amount, 0), companyCurrency)}</td>
                         <td></td>
                         <td></td>
@@ -417,6 +428,11 @@ export default function ExpensesPage() {
           )}
         </div>
       </MainContent>
+
+      {/* Attachment viewer modal */}
+      {viewAttachment && (
+        <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
+      )}
     </div>
   );
 }

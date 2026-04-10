@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Plus, Banknote, Calendar, X, Filter, Trash2 } from "lucide-react";
+import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
 
 interface Staff {
   id: string;
@@ -32,6 +33,7 @@ interface DailyCashPayment {
   status: string;
   paymentMethod?: string;
   fonepayRef?: string;
+  attachmentUrl?: string;
   createdByName: string;
   createdAt: string;
 }
@@ -73,6 +75,7 @@ interface CollectionLine {
   receiptNo: string;
   paymentMethod: string;
   fonepayRef: string;
+  attachmentUrl: string;
 }
 
 interface PageProps {
@@ -111,6 +114,7 @@ export default function DailyCashPage({ params }: PageProps) {
   const [formStaffId, setFormStaffId] = useState("");
   const [lines, setLines] = useState<CollectionLine[]>([]);
   const [saving, setSaving] = useState(false);
+  const [viewAttachment, setViewAttachment] = useState("");
 
   useEffect(() => {
     fetchCompany();
@@ -179,6 +183,7 @@ export default function DailyCashPage({ params }: PageProps) {
       receiptNo: "",
       paymentMethod: "cash",
       fonepayRef: "",
+      attachmentUrl: "",
     };
   }
 
@@ -223,6 +228,7 @@ export default function DailyCashPage({ params }: PageProps) {
             receiptNo: line.receiptNo || undefined,
             paymentMethod: line.paymentMethod,
             fonepayRef: line.fonepayRef || undefined,
+            attachmentUrl: line.attachmentUrl || undefined,
           }),
         });
         if (res.ok) {
@@ -447,7 +453,16 @@ export default function DailyCashPage({ params }: PageProps) {
                         </td>
                         <td className="p-3 max-w-[200px] truncate">{p.description || "-"}</td>
                         <td className="p-3 text-right font-semibold">{formatCurrency(p.amount, companyCurrency)}</td>
-                        <td className="p-3 text-xs">{p.receiptNo || "-"}</td>
+                        <td className="p-3 text-xs">
+                          <div className="flex items-center gap-1">
+                            {p.receiptNo || "-"}
+                            {p.attachmentUrl && (
+                              <button onClick={() => setViewAttachment(p.attachmentUrl!)} className="ml-1">
+                                <AttachmentBadge url={p.attachmentUrl} small />
+                              </button>
+                            )}
+                          </div>
+                        </td>
                         <td className="p-3">
                           <Badge className={
                             p.status === "approved" ? "bg-green-100 text-green-700" :
@@ -598,6 +613,13 @@ export default function DailyCashPage({ params }: PageProps) {
                       />
                     </div>
                   </div>
+
+                  <FileUpload
+                    label="Attach Receipt / Document"
+                    currentUrl={line.attachmentUrl || undefined}
+                    onFileUploaded={(url) => updateLine(line.id, "attachmentUrl", url)}
+                    onClear={() => updateLine(line.id, "attachmentUrl", "")}
+                  />
                 </div>
               ))}
             </div>
@@ -616,6 +638,10 @@ export default function DailyCashPage({ params }: PageProps) {
             </div>
           </div>
         </div>
+      )}
+      {/* Attachment Viewer */}
+      {viewAttachment && (
+        <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
       )}
     </div>
         </div>

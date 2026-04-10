@@ -97,6 +97,7 @@ export async function GET(
         status: p.status,
         paymentMethod: p.payment_method || "cash",
         fonepayRef: p.fonepay_ref || "",
+        attachmentUrl: p.attachment_url || "",
         createdByName: p.created_by_name || "",
         createdAt: p.created_at,
       })),
@@ -125,7 +126,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { staffId, date, amount, category, description, receiptNo, approvedBy, status, paymentMethod, fonepayRef } = body;
+    const { staffId, date, amount, category, description, receiptNo, approvedBy, status, paymentMethod, fonepayRef, attachmentUrl } = body;
 
     if (!date || !amount) {
       return NextResponse.json({ error: "date and amount are required" }, { status: 400 });
@@ -141,11 +142,12 @@ export async function POST(
     const staffVal = staffId || "";
     const approver = approvedBy || "";
     const statusVal = status || "approved";
+    const attachment = (attachmentUrl || "").replace(/'/g, "''");
 
     // Use string interpolation to avoid Prisma/SQLite null binding issues
     await prisma.$executeRawUnsafe(
-      `INSERT INTO daily_cash_payments (id, company_id, staff_id, date, amount, category, description, receipt_no, payment_method, fonepay_ref, approved_by, status, created_by, created_at, updated_at)
-       VALUES ('${id}', '${params.companyId}', ${staffVal ? `'${staffVal}'` : "NULL"}, '${date}', ${Number(amount)}, '${cat}', '${desc}', '${receipt}', '${method}', '${fpRef}', ${approver ? `'${approver}'` : "NULL"}, '${statusVal}', '${session.user.id}', '${now}', '${now}')`
+      `INSERT INTO daily_cash_payments (id, company_id, staff_id, date, amount, category, description, receipt_no, payment_method, fonepay_ref, approved_by, status, attachment_url, created_by, created_at, updated_at)
+       VALUES ('${id}', '${params.companyId}', ${staffVal ? `'${staffVal}'` : "NULL"}, '${date}', ${Number(amount)}, '${cat}', '${desc}', '${receipt}', '${method}', '${fpRef}', ${approver ? `'${approver}'` : "NULL"}, '${statusVal}', ${attachment ? `'${attachment}'` : "NULL"}, '${session.user.id}', '${now}', '${now}')`
     );
 
     // Create expense transaction for accounting

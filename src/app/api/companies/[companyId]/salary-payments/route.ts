@@ -92,6 +92,7 @@ export async function GET(
         netAmount: Number(p.net_amount),
         status: p.status,
         notes: p.notes,
+        attachmentUrl: p.attachment_url || "",
         createdByName: p.created_by_name || "System",
         createdBy: p.created_by,
         createdAt: p.created_at,
@@ -124,6 +125,7 @@ export async function POST(
       staffId, amount, month, paymentDate, paymentMethod,
       referenceNo, deductions, bonus, notes, autoDeductAdvance,
       customDeductions, // { fieldName: amount } from settings
+      attachmentUrl,
     } = body;
 
     if (!staffId || !amount || !month || !paymentDate) {
@@ -195,11 +197,12 @@ export async function POST(
     ].filter(Boolean).join(" | ");
 
     // Insert salary payment
+    const attachment = (attachmentUrl || "").replace(/'/g, "''");
     await prisma.$executeRawUnsafe(
       `INSERT INTO salary_payments
-        (id, company_id, staff_id, amount, month, payment_date, payment_method, reference_no, deductions, bonus, net_amount, status, notes, created_by, created_at, updated_at)
+        (id, company_id, staff_id, amount, month, payment_date, payment_method, reference_no, deductions, bonus, net_amount, status, notes, attachment_url, created_by, created_at, updated_at)
        VALUES
-        ('${id}', '${params.companyId}', '${staffId}', ${grossAmount}, '${month}', '${paymentDate}', '${method}', '${refNo}', ${totalDeductions}, ${bonusAmt}, ${netAmount}, 'paid', '${allNotes.replace(/'/g, "''")}', '${session.user.id}', '${now}', '${now}')`
+        ('${id}', '${params.companyId}', '${staffId}', ${grossAmount}, '${month}', '${paymentDate}', '${method}', '${refNo}', ${totalDeductions}, ${bonusAmt}, ${netAmount}, 'paid', '${allNotes.replace(/'/g, "''")}', ${attachment ? `'${attachment}'` : "NULL"}, '${session.user.id}', '${now}', '${now}')`
     );
 
     // Also create a corresponding expense transaction

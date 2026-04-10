@@ -85,6 +85,7 @@ export async function GET(
           createdByName: a.created_by_name || "System",
           createdBy: a.created_by,
           createdAt: a.created_at,
+          attachmentUrl: a.attachment_url || "",
           recoveries: recoveries.map((r: any) => ({
             id: r.id,
             amount: Number(r.amount),
@@ -162,7 +163,7 @@ export async function POST(
       return NextResponse.json({ sent: true });
     }
 
-    const { staffId, amount, paymentDate, paymentMethod, referenceNo, reason, recoveryDeadline, notes } = body;
+    const { staffId, amount, paymentDate, paymentMethod, referenceNo, reason, recoveryDeadline, notes, attachmentUrl } = body;
 
     if (!staffId || !amount || !paymentDate) {
       return NextResponse.json({ error: "staffId, amount, paymentDate are required" }, { status: 400 });
@@ -175,13 +176,14 @@ export async function POST(
     const reasonText = reason || "";
     const deadline = recoveryDeadline || "";
     const noteText = notes || "";
+    const attachment = (attachmentUrl || "").replace(/'/g, "''");
 
     // Use explicit SQL with no null params — SQLite/Prisma can be fussy with null bindings
     await prisma.$executeRawUnsafe(
       `INSERT INTO advance_payments
-        (id, company_id, staff_id, amount, payment_date, payment_method, reference_no, reason, due_amount, status, recovery_deadline, notes, created_by, created_at, updated_at)
+        (id, company_id, staff_id, amount, payment_date, payment_method, reference_no, reason, due_amount, status, recovery_deadline, notes, attachment_url, created_by, created_at, updated_at)
        VALUES
-        ('${id}', '${params.companyId}', '${staffId}', ${Number(amount)}, '${paymentDate}', '${method}', '${refNo}', '${reasonText}', ${Number(amount)}, 'due', '${deadline}', '${noteText}', '${session.user.id}', '${now}', '${now}')`
+        ('${id}', '${params.companyId}', '${staffId}', ${Number(amount)}, '${paymentDate}', '${method}', '${refNo}', '${reasonText}', ${Number(amount)}, 'due', '${deadline}', '${noteText}', ${attachment ? `'${attachment}'` : "NULL"}, '${session.user.id}', '${now}', '${now}')`
     );
 
     // Verify the insert succeeded
