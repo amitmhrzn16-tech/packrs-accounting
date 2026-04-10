@@ -82,10 +82,11 @@ export default function StaffPage({ params }: PageProps) {
   async function fetchStaff() {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (roleFilter) params.set("role", roleFilter);
-      if (!showInactive) params.set("isActive", "true");
-      const res = await fetch(`/api/companies/${companyId}/staff?${params}`);
+      const qp = new URLSearchParams();
+      if (roleFilter) qp.set("role", roleFilter);
+      if (!showInactive) qp.set("isActive", "true");
+      qp.set("_t", String(Date.now()));
+      const res = await fetch(`/api/companies/${companyId}/staff?${qp}`, { cache: "no-store" });
       const data = await res.json();
       setStaff(data.staff || []);
     } catch (err) {
@@ -132,7 +133,11 @@ export default function StaffPage({ params }: PageProps) {
       });
       if (res.ok) {
         setShowForm(false);
-        fetchStaff();
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchStaff();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed: ${err.error || res.statusText}`);
       }
     } catch (err) {
       console.error("Save failed:", err);

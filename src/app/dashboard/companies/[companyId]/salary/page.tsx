@@ -96,7 +96,7 @@ export default function SalaryPage({ params }: PageProps) {
 
   async function fetchStaff() {
     try {
-      const res = await fetch(`/api/companies/${companyId}/staff?isActive=true`);
+      const res = await fetch(`/api/companies/${companyId}/staff?isActive=true&_t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       setStaff(data.staff || []);
     } catch {}
@@ -108,7 +108,8 @@ export default function SalaryPage({ params }: PageProps) {
       const p = new URLSearchParams();
       if (filterMonth) p.set("month", filterMonth);
       if (filterStaff) p.set("staffId", filterStaff);
-      const res = await fetch(`/api/companies/${companyId}/salary-payments?${p}`);
+      p.set("_t", String(Date.now()));
+      const res = await fetch(`/api/companies/${companyId}/salary-payments?${p}`, { cache: "no-store" });
       const data = await res.json();
       setPayments(data.payments || []);
       setSummary(data.summary || { total_count: 0, total_paid: 0, total_deductions: 0, total_bonus: 0 });
@@ -143,10 +144,16 @@ export default function SalaryPage({ params }: PageProps) {
       });
       if (res.ok) {
         setShowForm(false);
-        fetchPayments();
-        fetchStaff(); // refresh advance dues
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchPayments();
+        await fetchStaff();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed: ${err.error || res.statusText}`);
       }
-    } catch {}
+    } catch (err) {
+      console.error("Salary save error:", err);
+    }
     setSaving(false);
   }
 

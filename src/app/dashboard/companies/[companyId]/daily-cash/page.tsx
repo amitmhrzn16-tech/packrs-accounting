@@ -103,7 +103,7 @@ export default function DailyCashPage({ params }: PageProps) {
 
   async function fetchStaff() {
     try {
-      const res = await fetch(`/api/companies/${companyId}/staff?isActive=true`);
+      const res = await fetch(`/api/companies/${companyId}/staff?isActive=true&_t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       setStaff(data.staff || []);
     } catch {}
@@ -122,7 +122,8 @@ export default function DailyCashPage({ params }: PageProps) {
       if (filterStaff) p.set("staffId", filterStaff);
       if (filterCategory) p.set("category", filterCategory);
 
-      const res = await fetch(`/api/companies/${companyId}/daily-cash?${p}`);
+      p.set("_t", String(Date.now()));
+      const res = await fetch(`/api/companies/${companyId}/daily-cash?${p}`, { cache: "no-store" });
       const data = await res.json();
       setPayments(data.payments || []);
       setCategorySummary(data.categorySummary || []);
@@ -153,9 +154,15 @@ export default function DailyCashPage({ params }: PageProps) {
       });
       if (res.ok) {
         setShowForm(false);
-        fetchPayments();
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchPayments();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed: ${err.error || res.statusText}`);
       }
-    } catch {}
+    } catch (err) {
+      console.error("Daily cash save error:", err);
+    }
     setSaving(false);
   }
 

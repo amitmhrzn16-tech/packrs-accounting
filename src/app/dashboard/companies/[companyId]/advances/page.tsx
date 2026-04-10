@@ -117,7 +117,7 @@ export default function AdvancesPage({ params }: PageProps) {
 
   async function fetchStaff() {
     try {
-      const res = await fetch(`/api/companies/${companyId}/staff?isActive=true`);
+      const res = await fetch(`/api/companies/${companyId}/staff?isActive=true&_t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       setStaff(data.staff || []);
     } catch {}
@@ -129,11 +129,14 @@ export default function AdvancesPage({ params }: PageProps) {
       const p = new URLSearchParams();
       if (filterStaff) p.set("staffId", filterStaff);
       if (filterStatus) p.set("status", filterStatus);
-      const res = await fetch(`/api/companies/${companyId}/advance-payments?${p}`);
+      p.set("_t", String(Date.now())); // cache-bust
+      const res = await fetch(`/api/companies/${companyId}/advance-payments?${p}`, { cache: "no-store" });
       const data = await res.json();
       setAdvances(data.advances || []);
       setSummary(data.summary || { total_advances: 0, total_given: 0, total_outstanding: 0, total_recovered: 0 });
-    } catch {}
+    } catch (err) {
+      console.error("fetchAdvances error:", err);
+    }
     setLoading(false);
   }
 
@@ -165,16 +168,30 @@ export default function AdvancesPage({ params }: PageProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...form,
+          staffId: form.staffId,
           amount: parseFloat(form.amount) || 0,
+          paymentDate: form.paymentDate,
+          paymentMethod: form.paymentMethod,
+          referenceNo: form.referenceNo,
+          reason: form.reason,
+          recoveryDeadline: form.recoveryDeadline,
+          notes: form.notes,
         }),
       });
       if (res.ok) {
         setShowForm(false);
-        fetchAdvances();
-        fetchStaff();
+        // Small delay to ensure DB write is committed before re-fetching
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchAdvances();
+        await fetchStaff();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to create advance: ${err.error || res.statusText}`);
       }
-    } catch {}
+    } catch (err) {
+      console.error("handleCreateAdvance error:", err);
+      alert("Failed to create advance. Check console for details.");
+    }
     setSaving(false);
   }
 
@@ -187,17 +204,25 @@ export default function AdvancesPage({ params }: PageProps) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ...recoveryForm,
             amount: parseFloat(recoveryForm.amount) || 0,
+            recoveryDate: recoveryForm.recoveryDate,
+            recoveryMethod: recoveryForm.recoveryMethod,
+            notes: recoveryForm.notes,
           }),
         }
       );
       if (res.ok) {
         setShowRecoveryForm(false);
-        fetchAdvances();
-        fetchStaff();
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchAdvances();
+        await fetchStaff();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Recovery failed: ${err.error || res.statusText}`);
       }
-    } catch {}
+    } catch (err) {
+      console.error("handleRecovery error:", err);
+    }
     setSaving(false);
   }
 
