@@ -25,6 +25,8 @@ import {
   Wallet,
   TrendingUp,
   TrendingDown,
+  Banknote,
+  Coins,
 } from "lucide-react";
 
 interface Category {
@@ -67,8 +69,18 @@ export default function CompanySettings({
   const [paymentMethodBalances, setPaymentMethodBalances] = useState<Record<string, number>>({});
   const [savingPaymentBalances, setSavingPaymentBalances] = useState(false);
 
+  // Payroll settings
+  interface PayrollField { id: string; settingType: string; fieldName: string; fieldLabel: string; fieldType: string; defaultValue: string; }
+  const [salaryDeductionFields, setSalaryDeductionFields] = useState<PayrollField[]>([]);
+  const [salaryBonusFields, setSalaryBonusFields] = useState<PayrollField[]>([]);
+  const [dailyCashCategories, setDailyCashCategories] = useState<PayrollField[]>([]);
+  const [newFieldLabel, setNewFieldLabel] = useState("");
+  const [newFieldType, setNewFieldType] = useState<"salary_deduction" | "salary_bonus" | "daily_cash_category">("salary_deduction");
+  const [newFieldDefault, setNewFieldDefault] = useState("");
+  const [addingField, setAddingField] = useState(false);
+
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"general" | "categories" | "payment">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "categories" | "payment" | "payroll">("general");
 
   useEffect(() => {
     fetchAll();
@@ -77,11 +89,14 @@ export default function CompanySettings({
   async function fetchAll() {
     setLoading(true);
     try {
-      const [companyRes, incomeCatRes, expenseCatRes, balancesRes] = await Promise.all([
+      const [companyRes, incomeCatRes, expenseCatRes, balancesRes, salaryDedRes, salaryBonusRes, cashCatRes] = await Promise.all([
         fetch(`/api/companies/${companyId}`),
         fetch(`/api/companies/${companyId}/categories?type=income`),
         fetch(`/api/companies/${companyId}/categories?type=expense`),
         fetch(`/api/companies/${companyId}/payment-balances`),
+        fetch(`/api/companies/${companyId}/payroll-settings?type=salary_deduction`).catch(() => null),
+        fetch(`/api/companies/${companyId}/payroll-settings?type=salary_bonus`).catch(() => null),
+        fetch(`/api/companies/${companyId}/payroll-settings?type=daily_cash_category`).catch(() => null),
       ]);
 
       if (companyRes.ok) {
@@ -108,6 +123,20 @@ export default function CompanySettings({
           balanceMap[b.payment_method] = b.opening_balance;
         });
         setPaymentMethodBalances(balanceMap);
+      }
+
+      // Payroll settings
+      if (salaryDedRes?.ok) {
+        const d = await salaryDedRes.json();
+        setSalaryDeductionFields(d.settings || []);
+      }
+      if (salaryBonusRes?.ok) {
+        const d = await salaryBonusRes.json();
+        setSalaryBonusFields(d.settings || []);
+      }
+      if (cashCatRes?.ok) {
+        const d = await cashCatRes.json();
+        setDailyCashCategories(d.settings || []);
       }
     } catch {
       toast.error("Failed to load settings");
@@ -211,6 +240,51 @@ export default function CompanySettings({
     }
   }
 
+  async function addPayrollField() {
+    if (!newFieldLabel.trim()) {
+      toast.error("Field label is required");
+      return;
+    }
+    setAddingField(true);
+    try {
+      const fieldName = newFieldLabel.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const res = await fetch(`/api/companies/${companyId}/payroll-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settingType: newFieldType,
+          fieldName,
+          fieldLabel: newFieldLabel.trim(),
+          fieldType: "number",
+          defaultValue: newFieldDefault || "0",
+        }),
+      });
+      if (!res.ok) throw new Error();
+      toast.success(`"${newFieldLabel}" added`);
+      setNewFieldLabel("");
+      setNewFieldDefault("");
+      // Refresh
+      fetchAll();
+    } catch {
+      toast.error("Failed to add field");
+    } finally {
+      setAddingField(false);
+    }
+  }
+
+  async function removePayrollField(fieldId: string) {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/payroll-settings?id=${fieldId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error();
+      toast.success("Field removed");
+      fetchAll();
+    } catch {
+      toast.error("Failed to remove field");
+    }
+  }
+
   function addPaymentMethod() {
     if (!newPaymentMethod.trim()) return;
     if (paymentMethods.includes(newPaymentMethod.trim())) {
@@ -261,6 +335,7 @@ export default function CompanySettings({
               { key: "general" as const, label: "General", icon: Settings },
               { key: "categories" as const, label: "Categories", icon: Tags },
               { key: "payment" as const, label: "Payment Methods", icon: CreditCard },
+              { key: "payroll" as const, label: "Payroll & Cash", icon: Banknote },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -512,6 +587,160 @@ export default function CompanySettings({
                   </div>
                 </DialogContent>
               </Dialog>
+            </div>
+          )}
+
+          {/* ═══════════ PAYROLL & CASH TAB ═══════════ */}
+          {activeTab === "payroll" && (
+            <div className="max-w-2xl space-y-6">
+              {/* Salary Deduction Fields */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingDown className="h-5 w-5 text-red-500" />
+                    Salary Deduction Fields
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Add custom deduction fields (TDS, PF, Insurance, SSF, etc.) that will appear automatically when paying salary.
+                  </p>
+                  <div className="flex gap-2 mb-4">
+                    <Input
+                      value={newFieldType === "salary_deduction" ? newFieldLabel : ""}
+                      onChange={(e) => { setNewFieldLabel(e.target.value); setNewFieldType("salary_deduction"); }}
+                      placeholder="e.g., TDS, Provident Fund, Insurance..."
+                      onFocus={() => setNewFieldType("salary_deduction")}
+                      onKeyDown={(e) => e.key === "Enter" && newFieldType === "salary_deduction" && addPayrollField()}
+                    />
+                    <Input
+                      value={newFieldType === "salary_deduction" ? newFieldDefault : ""}
+                      onChange={(e) => setNewFieldDefault(e.target.value)}
+                      placeholder="Default"
+                      className="w-24"
+                      type="number"
+                      onFocus={() => setNewFieldType("salary_deduction")}
+                    />
+                    <Button onClick={() => { setNewFieldType("salary_deduction"); addPayrollField(); }} disabled={addingField} className="shrink-0 gap-1">
+                      <Plus className="h-4 w-4" /> Add
+                    </Button>
+                  </div>
+                  {salaryDeductionFields.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">No salary deduction fields configured yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {salaryDeductionFields.map((f) => (
+                        <div key={f.id} className="flex items-center justify-between px-4 py-3 bg-red-50 rounded-lg border border-red-100">
+                          <div>
+                            <span className="text-sm font-medium">{f.fieldLabel}</span>
+                            {f.defaultValue && f.defaultValue !== "0" && (
+                              <span className="ml-2 text-xs text-gray-500">Default: {f.defaultValue}</span>
+                            )}
+                          </div>
+                          <button onClick={() => removePayrollField(f.id)} className="p-1 text-gray-400 hover:text-red-500" title="Remove">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Salary Bonus Fields */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5 text-green-500" />
+                    Salary Bonus / Allowance Fields
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Add custom bonus/allowance fields (Overtime, Incentive, Fuel Allowance, etc.).
+                  </p>
+                  <div className="flex gap-2 mb-4">
+                    <Input
+                      value={newFieldType === "salary_bonus" ? newFieldLabel : ""}
+                      onChange={(e) => { setNewFieldLabel(e.target.value); setNewFieldType("salary_bonus"); }}
+                      placeholder="e.g., Overtime, Fuel Allowance, Incentive..."
+                      onFocus={() => setNewFieldType("salary_bonus")}
+                      onKeyDown={(e) => e.key === "Enter" && newFieldType === "salary_bonus" && addPayrollField()}
+                    />
+                    <Input
+                      value={newFieldType === "salary_bonus" ? newFieldDefault : ""}
+                      onChange={(e) => setNewFieldDefault(e.target.value)}
+                      placeholder="Default"
+                      className="w-24"
+                      type="number"
+                      onFocus={() => setNewFieldType("salary_bonus")}
+                    />
+                    <Button onClick={() => { setNewFieldType("salary_bonus"); addPayrollField(); }} disabled={addingField} className="shrink-0 gap-1">
+                      <Plus className="h-4 w-4" /> Add
+                    </Button>
+                  </div>
+                  {salaryBonusFields.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">No bonus fields configured yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {salaryBonusFields.map((f) => (
+                        <div key={f.id} className="flex items-center justify-between px-4 py-3 bg-green-50 rounded-lg border border-green-100">
+                          <div>
+                            <span className="text-sm font-medium">{f.fieldLabel}</span>
+                            {f.defaultValue && f.defaultValue !== "0" && (
+                              <span className="ml-2 text-xs text-gray-500">Default: {f.defaultValue}</span>
+                            )}
+                          </div>
+                          <button onClick={() => removePayrollField(f.id)} className="p-1 text-gray-400 hover:text-red-500" title="Remove">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Daily Cash Categories */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Coins className="h-5 w-5 text-amber-500" />
+                    Daily Cash Categories
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Add custom daily cash categories that will appear in the Daily Cash page dropdown.
+                  </p>
+                  <div className="flex gap-2 mb-4">
+                    <Input
+                      value={newFieldType === "daily_cash_category" ? newFieldLabel : ""}
+                      onChange={(e) => { setNewFieldLabel(e.target.value); setNewFieldType("daily_cash_category"); }}
+                      placeholder="e.g., Parking, Toll, Courier Bag..."
+                      onFocus={() => setNewFieldType("daily_cash_category")}
+                      onKeyDown={(e) => e.key === "Enter" && newFieldType === "daily_cash_category" && addPayrollField()}
+                    />
+                    <Button onClick={() => { setNewFieldType("daily_cash_category"); addPayrollField(); }} disabled={addingField} className="shrink-0 gap-1">
+                      <Plus className="h-4 w-4" /> Add
+                    </Button>
+                  </div>
+                  {dailyCashCategories.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">No custom daily cash categories yet (defaults are still available)</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {dailyCashCategories.map((f) => (
+                        <div key={f.id} className="flex items-center justify-between px-4 py-3 bg-amber-50 rounded-lg border border-amber-100">
+                          <span className="text-sm font-medium">{f.fieldLabel}</span>
+                          <button onClick={() => removePayrollField(f.id)} className="p-1 text-gray-400 hover:text-red-500" title="Remove">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           )}
 

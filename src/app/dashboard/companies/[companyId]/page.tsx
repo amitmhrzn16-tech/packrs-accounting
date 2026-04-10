@@ -17,7 +17,12 @@ import {
   ArrowDownUp,
   CreditCard,
   Landmark,
+  Users,
+  Banknote,
+  AlertTriangle,
+  Coins,
 } from "lucide-react";
+import Link from "next/link";
 
 interface PaymentMethodEntry {
   method: string;
@@ -64,6 +69,14 @@ export default function CompanyDashboard({
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [payrollData, setPayrollData] = useState<{
+    staffCount: number;
+    riderCount: number;
+    totalPayroll: number;
+    totalAdvanceDue: number;
+    recentSalaries: number;
+    dailyCashToday: number;
+  } | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -71,9 +84,14 @@ export default function CompanyDashboard({
         setLoading(true);
         setError(null);
 
-        const [reportsRes, companyRes] = await Promise.all([
-          fetch(`/api/companies/${params.companyId}/reports`),
-          fetch(`/api/companies/${params.companyId}`),
+        const _t = Date.now();
+        const [reportsRes, companyRes, staffRes, salaryRes, dailyCashRes, advanceRes] = await Promise.all([
+          fetch(`/api/companies/${params.companyId}/reports?_t=${_t}`, { cache: "no-store" }),
+          fetch(`/api/companies/${params.companyId}?_t=${_t}`, { cache: "no-store" }),
+          fetch(`/api/companies/${params.companyId}/staff?isActive=true&_t=${_t}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/companies/${params.companyId}/salary-payments?month=${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}&_t=${_t}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/companies/${params.companyId}/daily-cash?date=${new Date().toISOString().split("T")[0]}&_t=${_t}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/companies/${params.companyId}/advance-payments?_t=${_t}`, { cache: "no-store" }).catch(() => null),
         ]);
 
         if (!reportsRes.ok || !companyRes.ok) {
@@ -85,6 +103,23 @@ export default function CompanyDashboard({
 
         setReportData(reports);
         setCompanyData(company);
+
+        // Payroll data
+        try {
+          const staffData = staffRes?.ok ? await staffRes.json() : { staff: [] };
+          const salaryData = salaryRes?.ok ? await salaryRes.json() : { summary: { total_paid: 0 } };
+          const cashData = dailyCashRes?.ok ? await dailyCashRes.json() : { summary: { total_amount: 0 } };
+          const advanceData = advanceRes?.ok ? await advanceRes.json() : { summary: { total_outstanding: 0 } };
+          const staffList = staffData.staff || [];
+          setPayrollData({
+            staffCount: staffList.length,
+            riderCount: staffList.filter((s: any) => s.role === "rider").length,
+            totalPayroll: staffList.reduce((sum: number, s: any) => sum + (s.salaryAmount || 0), 0),
+            totalAdvanceDue: Number(advanceData.summary?.total_outstanding) || 0,
+            recentSalaries: Number(salaryData.summary?.total_paid) || 0,
+            dailyCashToday: Number(cashData.summary?.total_amount) || 0,
+          });
+        } catch {}
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "An error occurred"
@@ -263,6 +298,53 @@ export default function CompanyDashboard({
             </CardContent>
           </Card>
         </div>
+
+        {/* Payroll & Staff Quick View */}
+        {payrollData && (
+          <div className="mb-8">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5 text-blue-500" />
+                  Payroll & Staff Overview
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                  <Link href={`/dashboard/companies/${params.companyId}/staff`} className="block rounded-lg border p-3 hover:bg-accent/50 transition-colors">
+                    <p className="text-xs text-muted-foreground">Total Staff</p>
+                    <p className="text-xl font-bold">{payrollData.staffCount}</p>
+                    <p className="text-xs text-blue-500">{payrollData.riderCount} riders</p>
+                  </Link>
+                  <Link href={`/dashboard/companies/${params.companyId}/salary`} className="block rounded-lg border p-3 hover:bg-accent/50 transition-colors">
+                    <p className="text-xs text-muted-foreground">Monthly Payroll</p>
+                    <p className="text-lg font-bold">{formatCurrency(payrollData.totalPayroll)}</p>
+                    <p className="text-xs text-muted-foreground">agreed/month</p>
+                  </Link>
+                  <Link href={`/dashboard/companies/${params.companyId}/salary`} className="block rounded-lg border p-3 hover:bg-accent/50 transition-colors">
+                    <p className="text-xs text-muted-foreground">Paid This Month</p>
+                    <p className="text-lg font-bold text-green-600">{formatCurrency(payrollData.recentSalaries)}</p>
+                  </Link>
+                  <Link href={`/dashboard/companies/${params.companyId}/advances`} className="block rounded-lg border p-3 hover:bg-accent/50 transition-colors">
+                    <p className="text-xs text-muted-foreground">Advances Due</p>
+                    <p className="text-lg font-bold text-orange-600">{formatCurrency(payrollData.totalAdvanceDue)}</p>
+                    <p className="text-xs text-orange-500">outstanding</p>
+                  </Link>
+                  <Link href={`/dashboard/companies/${params.companyId}/daily-cash`} className="block rounded-lg border p-3 hover:bg-accent/50 transition-colors">
+                    <p className="text-xs text-muted-foreground">Today&apos;s Cash</p>
+                    <p className="text-lg font-bold">{formatCurrency(payrollData.dailyCashToday)}</p>
+                    <p className="text-xs text-muted-foreground">spent today</p>
+                  </Link>
+                  <div className="flex items-center justify-center rounded-lg border p-3 bg-primary/5">
+                    <Link href={`/dashboard/companies/${params.companyId}/staff`} className="text-sm text-primary font-medium hover:underline">
+                      Manage Staff →
+                    </Link>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {/* Income vs Expense Chart */}
         <div className="mb-8">

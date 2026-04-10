@@ -19,6 +19,10 @@ import {
   PanelLeftClose,
   PanelLeft,
   Users,
+  UserCheck,
+  Banknote,
+  HandCoins,
+  Coins,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +61,26 @@ export function Sidebar({ companyId, companyName }: SidebarProps) {
           href: `/dashboard/companies/${companyId}/transactions`,
           label: "Transactions",
           icon: ArrowDownUp,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/staff`,
+          label: "Staff & Riders",
+          icon: UserCheck,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/salary`,
+          label: "Salary Payments",
+          icon: Banknote,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/advances`,
+          label: "Advances",
+          icon: HandCoins,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/daily-cash`,
+          label: "Daily Cash",
+          icon: Coins,
         },
         {
           href: `/dashboard/companies/${companyId}/reconciliation`,

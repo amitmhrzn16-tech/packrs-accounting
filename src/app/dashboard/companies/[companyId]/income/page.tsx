@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, TrendingUp, Calendar, Paperclip, X, Trash2, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { AttachmentBadge, AttachmentViewer } from '@/components/ui/file-upload';
 
 interface IncomeEntry {
   id: string;
@@ -29,6 +30,7 @@ interface IncomeEntry {
   paymentMethod: string;
   amount: number;
   referenceNo?: string;
+  attachmentUrl?: string;
 }
 
 interface Category {
@@ -59,6 +61,7 @@ export default function IncomePage({ params }: PageProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [viewAttachment, setViewAttachment] = useState("");
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -512,6 +515,7 @@ export default function IncomePage({ params }: PageProps) {
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Payment Method</th>
                         <th className="text-right py-3 px-4 font-semibold text-gray-700">Amount</th>
+                        <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">File</th>
                         <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">💬</th>
                         <th className="py-3 px-2 w-10"></th>
                       </tr>
@@ -546,6 +550,13 @@ export default function IncomePage({ params }: PageProps) {
                           </td>
                           <td className="py-3 px-4 text-right font-semibold text-green-600">
                             {formatCurrency(entry.amount, companyCurrency)}
+                          </td>
+                          <td className="py-3 px-2 text-center">
+                            {entry.attachmentUrl && (
+                              <button onClick={() => setViewAttachment(entry.attachmentUrl!)} title="View attachment">
+                                <AttachmentBadge url={entry.attachmentUrl} small />
+                              </button>
+                            )}
                           </td>
                           <td className="py-3 px-2 text-center">
                             <CommentThread
@@ -586,7 +597,7 @@ export default function IncomePage({ params }: PageProps) {
                     </tbody>
                     <tfoot>
                       <tr className="bg-green-50 border-t-2 border-green-200">
-                        <td colSpan={5} className="py-3 px-4 font-bold text-gray-900 text-right">
+                        <td colSpan={6} className="py-3 px-4 font-bold text-gray-900 text-right">
                           Total ({income.length} entries)
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-green-700 text-lg">
@@ -603,6 +614,11 @@ export default function IncomePage({ params }: PageProps) {
           )}
         </div>
       </MainContent>
+
+      {/* Attachment viewer modal */}
+      {viewAttachment && (
+        <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
+      )}
     </div>
   );
 }

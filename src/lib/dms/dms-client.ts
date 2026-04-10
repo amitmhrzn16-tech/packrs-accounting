@@ -139,8 +139,78 @@ export async function dmsLogin(
 
     console.log("[DMS] Login POST status:", status, "location:", location, "cookies:", cookies.substring(0, 100));
 
+    // Helper — verify an authenticated session by hitting common landing pages.
+    // We accept success if ANY of these return 200 AND don't render the login form.
+    const verifySession = async (): Promise<{ ok: boolean; reason: string }> => {
+      const candidates = [
+        "/dashboard",
+        "/account/dashboard",
+        "/home",
+        "/account/home",
+        "/",
+      ];
+      for (const path of candidates) {
+        try {
+          const url = `${baseUrl}${path}`;
+          const res = await fetch(url, {
+            method: "GET",
+            redirect: "manual",
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; PackrsAccounting/1.0)",
+              Cookie: cookies,
+              Accept: "text/html,application/xhtml+xml",
+            },
+          });
+          cookies = collectCookies(res, cookies);
+
+          // If server redirects us back to /login — not authenticated
+          if (res.status === 302 || res.status === 301) {
+            const loc = (res.headers.get("location") || "").toLowerCase();
+            if (loc.includes("login") || loc.includes("signin")) {
+              continue;
+            }
+            // Redirect to something else — likely success, follow once
+            const next = loc.startsWith("http")
+              ? loc
+              : `${baseUrl}${loc.startsWith("/") ? "" : "/"}${loc}`;
+            const res2 = await fetch(next, {
+              method: "GET",
+              redirect: "manual",
+              headers: { Cookie: cookies, Accept: "text/html" },
+            });
+            cookies = collectCookies(res2, cookies);
+            if (res2.status === 200) {
+              const html2 = await res2.text();
+              if (!looksLikeLoginPage(html2)) {
+                return { ok: true, reason: `verified via redirect from ${path}` };
+              }
+            }
+            continue;
+          }
+
+          if (res.status === 200) {
+            const html = await res.text();
+            if (!looksLikeLoginPage(html)) {
+              return { ok: true, reason: `verified via ${path}` };
+            }
+          }
+        } catch {}
+      }
+      return { ok: false, reason: "no authenticated landing page reachable" };
+    };
+
     // Follow redirect chain to collect all cookies
-    if (status === 302 && location) {
+    if (status === 302 || status === 301) {
+      const loc = location.toLowerCase();
+      // If the POST redirects us straight back to the login page → bad creds
+      if (loc.includes("login") || loc.includes("signin")) {
+        return {
+          success: false,
+          cookies: "",
+          error: "Invalid credentials (server redirected back to login)",
+        };
+      }
+
       const redirectUrl = location.startsWith("http")
         ? location
         : `${baseUrl}${location.startsWith("/") ? "" : "/"}${location}`;
@@ -149,6 +219,7 @@ export async function dmsLogin(
         method: "GET",
         redirect: "manual",
         headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; PackrsAccounting/1.0)",
           Cookie: cookies,
           Accept: "text/html",
         },
@@ -157,41 +228,57 @@ export async function dmsLogin(
       cookies = collectCookies(redirectRes, cookies);
       console.log("[DMS] Redirect status:", redirectRes.status, "cookies now:", cookies.substring(0, 100));
 
-      // Check if redirected to login (failed) vs dashboard (success)
-      if (location.includes("login")) {
-        return { success: false, cookies: "", error: "Invalid credentials" };
+      // Even after following the redirect, verify the session is usable
+      const verified = await verifySession();
+      if (verified.ok) {
+        console.log("[DMS] Login success —", verified.reason);
+        return { success: true, cookies };
       }
-
-      // Success - redirected to dashboard
-      return { success: true, cookies };
+      return {
+        success: false,
+        cookies: "",
+        error: `Login redirected to ${location} but session not authenticated`,
+      };
     }
 
-    // If 200 response, check content
+    // If 200 response, the server most likely re-rendered the login page on
+    // failure, OR rendered the dashboard directly. Inspect the body to decide.
     if (status === 200) {
       const body = await loginRes.text();
-      if (body.includes("Dashboard") || body.includes("dashboard")) {
+
+      if (looksLikeLoginPage(body)) {
+        // Look for an inline error message so we can give the user something useful
+        const errMsg = extractLoginError(body);
+        return {
+          success: false,
+          cookies: "",
+          error: errMsg
+            ? `Login failed: ${errMsg}`
+            : "Login failed — server returned login page (check username/password)",
+        };
+      }
+
+      // Body doesn't look like the login form — probably already on an authenticated
+      // page. Double-check by actually hitting a protected route.
+      const verified = await verifySession();
+      if (verified.ok) {
+        console.log("[DMS] Login success —", verified.reason);
         return { success: true, cookies };
       }
-      return { success: false, cookies: "", error: "Login returned 200 but no dashboard found" };
+
+      return {
+        success: false,
+        cookies: "",
+        error:
+          "Login returned 200 but session could not be verified against any dashboard route",
+      };
     }
 
-    // Verify by hitting dashboard
-    const verifyRes = await fetch(`${baseUrl}/dashboard`, {
-      method: "GET",
-      redirect: "manual",
-      headers: { Cookie: cookies, Accept: "text/html" },
-    });
-
-    cookies = collectCookies(verifyRes, cookies);
-
-    if (verifyRes.status === 200) {
-      const vHtml = await verifyRes.text();
-      if (vHtml.includes("Dashboard") || vHtml.includes("Accounting")) {
-        return { success: true, cookies };
-      }
-    }
-
-    return { success: false, cookies: "", error: `Login failed with status ${status}` };
+    return {
+      success: false,
+      cookies: "",
+      error: `Login failed with HTTP ${status}`,
+    };
   } catch (error: any) {
     return {
       success: false,
@@ -199,6 +286,60 @@ export async function dmsLogin(
       error: `Login error: ${error?.message || "Unknown error"}`,
     };
   }
+}
+
+/**
+ * Heuristic: does this HTML look like the DMS login page?
+ * We check for multiple independent signals because a single keyword
+ * (e.g. "login") can appear on any page.
+ */
+function looksLikeLoginPage(html: string): boolean {
+  if (!html) return false;
+  const lower = html.toLowerCase();
+
+  // Strong signal: a <form> that POSTs to a login endpoint
+  const hasLoginForm =
+    /<form[^>]*action="[^"]*(login|signin|userlogin)[^"]*"/i.test(html);
+
+  // Strong signal: a password input + a username/email input in the same page
+  const hasPasswordField = /<input[^>]*type=["']?password["']?/i.test(html);
+  const hasUserField =
+    /<input[^>]*name=["']?(username|email|user|login)["']?/i.test(html);
+  const hasCreds = hasPasswordField && hasUserField;
+
+  // Weak signal: obvious "sign in" title/button
+  const hasSignInText =
+    lower.includes("sign in") ||
+    lower.includes("signin") ||
+    lower.includes("please login") ||
+    lower.includes("login to continue");
+
+  // Page is a login page if it has a login form OR both credential fields
+  return hasLoginForm || hasCreds || (hasPasswordField && hasSignInText);
+}
+
+/**
+ * Best-effort extraction of a server-rendered error message from a failed
+ * login response (so we can surface "Invalid credentials" etc. to the user).
+ */
+function extractLoginError(html: string): string | null {
+  // Common patterns: <div class="alert alert-danger">...</div>, flash messages, etc.
+  const patterns = [
+    /<div[^>]*class="[^"]*(?:alert-danger|error|invalid-feedback|text-danger)[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+    /<span[^>]*class="[^"]*(?:error|text-danger)[^"]*"[^>]*>([\s\S]*?)<\/span>/i,
+    /<p[^>]*class="[^"]*(?:error|text-danger)[^"]*"[^>]*>([\s\S]*?)<\/p>/i,
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (m) {
+      const text = m[1]
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text.length > 0 && text.length < 200) return text;
+    }
+  }
+  return null;
 }
 
 /**
