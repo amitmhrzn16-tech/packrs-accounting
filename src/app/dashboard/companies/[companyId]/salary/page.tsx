@@ -9,7 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { Plus, DollarSign, Calendar, Users, TrendingDown, X, CheckCircle } from "lucide-react";
+import {
+  Plus, DollarSign, Calendar, Users, TrendingDown, X, CheckCircle,
+  AlertTriangle, Settings, Minus, PlusCircle
+} from "lucide-react";
 
 interface Staff {
   id: string;
@@ -39,6 +42,15 @@ interface SalaryPayment {
   createdByName: string;
 }
 
+interface PayrollSetting {
+  id: string;
+  settingType: string;
+  fieldName: string;
+  fieldLabel: string;
+  fieldType: string;
+  defaultValue: string;
+}
+
 const PAYMENT_METHODS = [
   { value: "cash", label: "Cash" },
   { value: "bank", label: "Bank Transfer" },
@@ -66,19 +78,27 @@ export default function SalaryPage({ params }: PageProps) {
   });
   const [filterStaff, setFilterStaff] = useState("");
 
+  // Payroll settings (custom fields)
+  const [deductionFields, setDeductionFields] = useState<PayrollSetting[]>([]);
+  const [bonusFields, setBonusFields] = useState<PayrollSetting[]>([]);
+
   // Form
   const [showForm, setShowForm] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
   const [form, setForm] = useState({
     staffId: "", amount: "", month: "", paymentDate: "",
-    paymentMethod: "cash", referenceNo: "", deductions: "0",
-    bonus: "0", notes: "", autoDeductAdvance: true,
+    paymentMethod: "cash", referenceNo: "", notes: "",
+    autoDeductAdvance: true,
   });
+  // Dynamic fields state: { fieldName: "amount" }
+  const [customDeductions, setCustomDeductions] = useState<Record<string, string>>({});
+  const [customBonuses, setCustomBonuses] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetchCompany();
     fetchStaff();
+    fetchPayrollSettings();
   }, [companyId]);
 
   useEffect(() => {
@@ -102,6 +122,19 @@ export default function SalaryPage({ params }: PageProps) {
     } catch {}
   }
 
+  async function fetchPayrollSettings() {
+    try {
+      const [dedRes, bonRes] = await Promise.all([
+        fetch(`/api/companies/${companyId}/payroll-settings?type=salary_deduction&_t=${Date.now()}`, { cache: "no-store" }),
+        fetch(`/api/companies/${companyId}/payroll-settings?type=salary_bonus&_t=${Date.now()}`, { cache: "no-store" }),
+      ]);
+      const dedData = await dedRes.json();
+      const bonData = await bonRes.json();
+      setDeductionFields(dedData.settings || []);
+      setBonusFields(bonData.settings || []);
+    } catch {}
+  }
+
   async function fetchPayments() {
     setLoading(true);
     try {
@@ -122,9 +155,16 @@ export default function SalaryPage({ params }: PageProps) {
     setForm({
       staffId: s?.id || "", amount: s ? String(s.salaryAmount) : "",
       month: filterMonth, paymentDate: today, paymentMethod: "cash",
-      referenceNo: "", deductions: "0", bonus: "0", notes: "",
+      referenceNo: "", notes: "",
       autoDeductAdvance: true,
     });
+    // Initialize custom fields with defaults
+    const ded: Record<string, string> = {};
+    deductionFields.forEach((f) => { ded[f.fieldName] = f.defaultValue || "0"; });
+    setCustomDeductions(ded);
+    const bon: Record<string, string> = {};
+    bonusFields.forEach((f) => { bon[f.fieldName] = f.defaultValue || "0"; });
+    setCustomBonuses(bon);
     setShowForm(true);
     setShowBulkForm(false);
   }
@@ -132,14 +172,28 @@ export default function SalaryPage({ params }: PageProps) {
   async function handleSaveSingle() {
     setSaving(true);
     try {
+      // Merge custom deductions + bonuses into single customDeductions object (API supports this)
+      const allCustomDed: Record<string, number> = {};
+      for (const [key, val] of Object.entries(customDeductions)) {
+        const v = parseFloat(val) || 0;
+        if (v > 0) allCustomDed[key] = v;
+      }
+
+      // Custom bonuses are sent as negative deductions (added to bonus)
+      let totalCustomBonus = 0;
+      for (const [, val] of Object.entries(customBonuses)) {
+        totalCustomBonus += parseFloat(val) || 0;
+      }
+
       const res = await fetch(`/api/companies/${companyId}/salary-payments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
           amount: parseFloat(form.amount) || 0,
-          deductions: parseFloat(form.deductions) || 0,
-          bonus: parseFloat(form.bonus) || 0,
+          deductions: 0, // base deductions set to 0 — all via customDeductions
+          bonus: totalCustomBonus,
+          customDeductions: allCustomDed,
         }),
       });
       if (res.ok) {
@@ -163,7 +217,6 @@ export default function SalaryPage({ params }: PageProps) {
     let successCount = 0;
     for (const s of staff) {
       if (s.salaryAmount <= 0) continue;
-      // Check if already paid for this month
       const alreadyPaid = payments.find(
         (p) => p.staff_id === s.id && p.month === filterMonth
       );
@@ -195,7 +248,15 @@ export default function SalaryPage({ params }: PageProps) {
   }
 
   const selectedStaff = staff.find((s) => s.id === form.staffId);
-  const netPreview = (parseFloat(form.amount) || 0) - (parseFloat(form.deductions) || 0) + (parseFloat(form.bonus) || 0);
+
+  // Calculate net preview with all custom fields
+  const grossAmount = parseFloat(form.amount) || 0;
+  const totalCustomDed = Object.values(customDeductions).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const totalCustomBon = Object.values(customBonuses).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const advanceDeductPreview = selectedStaff && selectedStaff.totalAdvanceDue > 0 && form.autoDeductAdvance
+    ? Math.min(selectedStaff.totalAdvanceDue, grossAmount * 0.25)
+    : 0;
+  const netPreview = grossAmount - totalCustomDed - advanceDeductPreview + totalCustomBon;
 
   // Check who's already paid for selected month
   const paidStaffIds = new Set(payments.filter((p) => p.month === filterMonth).map((p) => p.staff_id));
@@ -210,7 +271,7 @@ export default function SalaryPage({ params }: PageProps) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Salary Payments</h1>
-          <p className="text-sm text-muted-foreground">Manage monthly salary payments with advance auto-deduction</p>
+          <p className="text-sm text-muted-foreground">Manage monthly salary with custom deductions, bonuses, and advance auto-deduction</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowBulkForm(true)}>
@@ -373,7 +434,7 @@ export default function SalaryPage({ params }: PageProps) {
                     <p className="text-xs text-muted-foreground">
                       {formatCurrency(s.salaryAmount, companyCurrency)} / month
                       {s.totalAdvanceDue > 0 && (
-                        <span className="ml-1 text-orange-500">(Due: {formatCurrency(s.totalAdvanceDue, companyCurrency)})</span>
+                        <span className="ml-1 text-red-500 font-medium">(Adv Due: {formatCurrency(s.totalAdvanceDue, companyCurrency)})</span>
                       )}
                     </p>
                   </div>
@@ -385,10 +446,10 @@ export default function SalaryPage({ params }: PageProps) {
         </Card>
       )}
 
-      {/* Single Pay Modal */}
+      {/* Single Pay Modal — with dynamic custom fields */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="mx-4 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
+          <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold">Pay Salary</h2>
               <button onClick={() => setShowForm(false)} className="rounded p-1 hover:bg-accent">
@@ -414,17 +475,29 @@ export default function SalaryPage({ params }: PageProps) {
                 </select>
               </div>
 
+              {/* Advance Due Warning — prominent red banner */}
               {selectedStaff && selectedStaff.totalAdvanceDue > 0 && (
-                <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm">
-                  <p className="font-medium text-orange-700">Pending Advance Due: {formatCurrency(selectedStaff.totalAdvanceDue, companyCurrency)}</p>
-                  <label className="mt-2 flex items-center gap-2">
+                <div className="rounded-lg border-2 border-red-300 bg-red-50 p-4">
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertTriangle className="h-4 w-4 text-red-600" />
+                    <p className="font-bold text-red-700">Pending Advance Due</p>
+                  </div>
+                  <p className="text-sm text-red-600 mb-2">
+                    {selectedStaff.name} has <strong>{formatCurrency(selectedStaff.totalAdvanceDue, companyCurrency)}</strong> in unpaid advances.
+                  </p>
+                  <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
                       checked={form.autoDeductAdvance}
                       onChange={(e) => setForm({ ...form, autoDeductAdvance: e.target.checked })}
                     />
-                    <span className="text-xs">Auto-deduct up to 25% from salary</span>
+                    <span className="text-sm text-red-700">Auto-deduct up to 25% of gross salary ({formatCurrency(grossAmount * 0.25, companyCurrency)})</span>
                   </label>
+                  {form.autoDeductAdvance && (
+                    <p className="text-xs text-red-500 mt-1">
+                      Will deduct: {formatCurrency(advanceDeductPreview, companyCurrency)} from this salary
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -439,20 +512,96 @@ export default function SalaryPage({ params }: PageProps) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Deductions</Label>
-                  <Input type="number" value={form.deductions} onChange={(e) => setForm({ ...form, deductions: e.target.value })} />
+              {/* Custom Deduction Fields from Settings */}
+              {deductionFields.length > 0 && (
+                <div className="rounded-lg border p-3 space-y-2">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Minus className="h-3.5 w-3.5 text-red-500" />
+                    <Label className="font-semibold text-red-700 text-sm">Deductions</Label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {deductionFields.map((field) => (
+                      <div key={field.id}>
+                        <Label className="text-xs">{field.fieldLabel}</Label>
+                        <Input
+                          type="number"
+                          value={customDeductions[field.fieldName] || "0"}
+                          onChange={(e) => setCustomDeductions({ ...customDeductions, [field.fieldName]: e.target.value })}
+                          className="h-8"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {totalCustomDed > 0 && (
+                    <p className="text-xs text-red-500 font-medium">Total deductions: -{formatCurrency(totalCustomDed, companyCurrency)}</p>
+                  )}
                 </div>
-                <div>
-                  <Label>Bonus</Label>
-                  <Input type="number" value={form.bonus} onChange={(e) => setForm({ ...form, bonus: e.target.value })} />
-                </div>
-              </div>
+              )}
 
-              <div className="rounded-lg bg-primary/5 p-3 text-center">
-                <p className="text-xs text-muted-foreground">Net Payable</p>
-                <p className="text-xl font-bold">{formatCurrency(netPreview, companyCurrency)}</p>
+              {/* Custom Bonus Fields from Settings */}
+              {bonusFields.length > 0 && (
+                <div className="rounded-lg border p-3 space-y-2">
+                  <div className="flex items-center gap-2 mb-1">
+                    <PlusCircle className="h-3.5 w-3.5 text-green-500" />
+                    <Label className="font-semibold text-green-700 text-sm">Bonuses / Allowances</Label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {bonusFields.map((field) => (
+                      <div key={field.id}>
+                        <Label className="text-xs">{field.fieldLabel}</Label>
+                        <Input
+                          type="number"
+                          value={customBonuses[field.fieldName] || "0"}
+                          onChange={(e) => setCustomBonuses({ ...customBonuses, [field.fieldName]: e.target.value })}
+                          className="h-8"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {totalCustomBon > 0 && (
+                    <p className="text-xs text-green-600 font-medium">Total bonuses: +{formatCurrency(totalCustomBon, companyCurrency)}</p>
+                  )}
+                </div>
+              )}
+
+              {/* No custom fields hint */}
+              {deductionFields.length === 0 && bonusFields.length === 0 && (
+                <div className="rounded-lg border border-dashed p-3 text-center text-sm text-muted-foreground">
+                  <Settings className="h-4 w-4 mx-auto mb-1" />
+                  Add custom deduction/bonus fields in <strong>Settings → Payroll & Cash</strong>
+                </div>
+              )}
+
+              {/* Net Preview */}
+              <div className="rounded-lg bg-primary/5 p-3">
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Gross Salary</span>
+                    <span>{formatCurrency(grossAmount, companyCurrency)}</span>
+                  </div>
+                  {totalCustomDed > 0 && (
+                    <div className="flex justify-between text-red-600">
+                      <span>Deductions</span>
+                      <span>-{formatCurrency(totalCustomDed, companyCurrency)}</span>
+                    </div>
+                  )}
+                  {advanceDeductPreview > 0 && (
+                    <div className="flex justify-between text-orange-600">
+                      <span>Advance Recovery</span>
+                      <span>-{formatCurrency(advanceDeductPreview, companyCurrency)}</span>
+                    </div>
+                  )}
+                  {totalCustomBon > 0 && (
+                    <div className="flex justify-between text-green-600">
+                      <span>Bonuses</span>
+                      <span>+{formatCurrency(totalCustomBon, companyCurrency)}</span>
+                    </div>
+                  )}
+                  <div className="border-t pt-1 flex justify-between font-bold text-lg">
+                    <span>Net Payable</span>
+                    <span>{formatCurrency(netPreview, companyCurrency)}</span>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -512,7 +661,12 @@ export default function SalaryPage({ params }: PageProps) {
             <div className="space-y-2 mb-4 max-h-48 overflow-y-auto">
               {unpaidStaff.map((s) => (
                 <div key={s.id} className="flex justify-between text-sm border-b pb-1">
-                  <span>{s.name}</span>
+                  <div>
+                    <span>{s.name}</span>
+                    {s.totalAdvanceDue > 0 && (
+                      <span className="ml-1 text-xs text-red-500">(Adv: {formatCurrency(s.totalAdvanceDue, companyCurrency)})</span>
+                    )}
+                  </div>
                   <span className="font-medium">{formatCurrency(s.salaryAmount, companyCurrency)}</span>
                 </div>
               ))}

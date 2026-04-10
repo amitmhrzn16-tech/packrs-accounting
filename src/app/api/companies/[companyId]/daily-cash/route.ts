@@ -79,6 +79,8 @@ export async function GET(
         createdAt: p.created_at,
         receiptNo: p.receipt_no,
         approvedBy: p.approved_by,
+        paymentMethod: p.payment_method || "cash",
+        fonepayRef: p.fonepay_ref || "",
       })),
       categorySummary,
       summary: totalSummary[0] || { total_count: 0, total_amount: 0 },
@@ -105,7 +107,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { staffId, date, amount, category, description, receiptNo, approvedBy, status } = body;
+    const { staffId, date, amount, category, description, receiptNo, approvedBy, status, paymentMethod, fonepayRef } = body;
 
     if (!date || !amount) {
       return NextResponse.json({ error: "date and amount are required" }, { status: 400 });
@@ -113,24 +115,27 @@ export async function POST(
 
     const id = cuid();
     const now = new Date().toISOString();
+    const cat = category || "general";
+    const desc = (description || "").replace(/'/g, "''");
+    const receipt = (receiptNo || "").replace(/'/g, "''");
+    const method = paymentMethod || "cash";
+    const fpRef = (fonepayRef || "").replace(/'/g, "''");
+    const staffVal = staffId || "";
+    const approver = approvedBy || "";
+    const statusVal = status || "approved";
 
+    // Use string interpolation to avoid Prisma/SQLite null binding issues
     await prisma.$executeRawUnsafe(
-      `INSERT INTO daily_cash_payments (id, company_id, staff_id, date, amount, category, description, receipt_no, approved_by, status, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, params.companyId, staffId || null, date, amount,
-      category || "general", description || null, receiptNo || null,
-      approvedBy || null, status || "approved",
-      session.user.id, now, now
+      `INSERT INTO daily_cash_payments (id, company_id, staff_id, date, amount, category, description, receipt_no, payment_method, fonepay_ref, approved_by, status, created_by, created_at, updated_at)
+       VALUES ('${id}', '${params.companyId}', ${staffVal ? `'${staffVal}'` : "NULL"}, '${date}', ${Number(amount)}, '${cat}', '${desc}', '${receipt}', '${method}', '${fpRef}', ${approver ? `'${approver}'` : "NULL"}, '${statusVal}', '${session.user.id}', '${now}', '${now}')`
     );
 
     // Create expense transaction for accounting
     const txnId = "t" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const particulars = `Daily Cash: ${cat}${desc ? ` - ${desc}` : ""}${method === "fonepay" ? ` (Fonepay: ${fpRef})` : ""}`;
     await prisma.$executeRawUnsafe(
       `INSERT INTO transactions (id, company_id, type, amount, particulars, date, payment_method, created_by, source, created_at, updated_at)
-       VALUES (?, ?, 'expense', ?, ?, ?, 'cash', ?, 'web', ?, ?)`,
-      txnId, params.companyId, amount,
-      `Daily Cash: ${category || "general"}${description ? ` - ${description}` : ""}`,
-      date, session.user.id, now, now
+       VALUES ('${txnId}', '${params.companyId}', 'expense', ${Number(amount)}, '${particulars.replace(/'/g, "''")}', '${date}', '${method}', '${session.user.id}', 'web', '${now}', '${now}')`
     );
 
     // Slack
@@ -144,9 +149,10 @@ export async function POST(
 
     notifySlack(
       params.companyId,
-      `💵 *Daily Cash Payment*\n` +
-      `> ${formatCurrency(amount, currency)} | ${category || "general"} | ${staffName}\n` +
-      `> ${description || "No description"} | Date: ${date}`
+      `💵 *Daily Cash ${cat === "cash_collection" ? "Collection" : "Payment"}*\n` +
+      `> ${formatCurrency(Number(amount), currency)} | ${cat} | ${staffName}\n` +
+      `> Method: ${method}${method === "fonepay" && fpRef ? ` (Ref: ${fpRef})` : ""}\n` +
+      `> ${desc || "No description"} | Date: ${date}`
     ).catch(() => {});
 
     return NextResponse.json({ id, transactionId: txnId }, { status: 201 });

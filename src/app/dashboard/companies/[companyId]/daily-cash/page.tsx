@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { Plus, Banknote, Calendar, Fuel, Utensils, Truck, Wrench, X, Filter } from "lucide-react";
+import { Plus, Banknote, Calendar, X, Filter, Trash2 } from "lucide-react";
 
 interface Staff {
   id: string;
@@ -30,6 +30,8 @@ interface DailyCashPayment {
   receiptNo?: string;
   approvedBy?: string;
   status: string;
+  paymentMethod?: string;
+  fonepayRef?: string;
   createdByName: string;
   createdAt: string;
 }
@@ -40,7 +42,18 @@ interface CategorySummary {
   total: number;
 }
 
-const CASH_CATEGORIES = [
+interface PayrollSetting {
+  id: string;
+  settingType: string;
+  fieldName: string;
+  fieldLabel: string;
+  fieldType: string;
+  defaultValue: string;
+}
+
+const DEFAULT_CASH_CATEGORIES = [
+  { value: "cash_collection", label: "Cash Collection", icon: "💰" },
+  { value: "fonepay", label: "Fonepay", icon: "📱" },
   { value: "fuel", label: "Fuel / Petrol", icon: "⛽" },
   { value: "food", label: "Food / Meals", icon: "🍽️" },
   { value: "transport", label: "Transport", icon: "🚚" },
@@ -51,6 +64,16 @@ const CASH_CATEGORIES = [
   { value: "utilities", label: "Utilities", icon: "💡" },
   { value: "general", label: "General / Misc", icon: "💵" },
 ];
+
+interface CollectionLine {
+  id: string;
+  category: string;
+  amount: string;
+  description: string;
+  receiptNo: string;
+  paymentMethod: string;
+  fonepayRef: string;
+}
 
 interface PageProps {
   params: { companyId: string };
@@ -66,6 +89,13 @@ export default function DailyCashPage({ params }: PageProps) {
   const [companyName, setCompanyName] = useState("");
   const [categorySummary, setCategorySummary] = useState<CategorySummary[]>([]);
   const [totalSummary, setTotalSummary] = useState({ total_count: 0, total_amount: 0 });
+  const [customCategories, setCustomCategories] = useState<PayrollSetting[]>([]);
+
+  // All categories = defaults + custom
+  const allCategories = [
+    ...DEFAULT_CASH_CATEGORIES,
+    ...customCategories.map((c) => ({ value: c.fieldName, label: c.fieldLabel, icon: "🏷️" })),
+  ];
 
   // Filters
   const [filterDate, setFilterDate] = useState(() => new Date().toISOString().split("T")[0]);
@@ -75,17 +105,17 @@ export default function DailyCashPage({ params }: PageProps) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  // Form
+  // Form — multi-line collection
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
-    staffId: "", date: "", amount: "", category: "general",
-    description: "", receiptNo: "",
-  });
+  const [formDate, setFormDate] = useState("");
+  const [formStaffId, setFormStaffId] = useState("");
+  const [lines, setLines] = useState<CollectionLine[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetchCompany();
     fetchStaff();
+    fetchCustomCategories();
   }, [companyId]);
 
   useEffect(() => {
@@ -106,6 +136,14 @@ export default function DailyCashPage({ params }: PageProps) {
       const res = await fetch(`/api/companies/${companyId}/staff?isActive=true&_t=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       setStaff(data.staff || []);
+    } catch {}
+  }
+
+  async function fetchCustomCategories() {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/payroll-settings?type=daily_cash_category&_t=${Date.now()}`, { cache: "no-store" });
+      const data = await res.json();
+      setCustomCategories(data.settings || []);
     } catch {}
   }
 
@@ -132,43 +170,90 @@ export default function DailyCashPage({ params }: PageProps) {
     setLoading(false);
   }
 
+  function createNewLine(): CollectionLine {
+    return {
+      id: Math.random().toString(36).slice(2),
+      category: "cash_collection",
+      amount: "",
+      description: "",
+      receiptNo: "",
+      paymentMethod: "cash",
+      fonepayRef: "",
+    };
+  }
+
   function openForm() {
-    setForm({
-      staffId: "", date: filterDate || new Date().toISOString().split("T")[0],
-      amount: "", category: "general", description: "", receiptNo: "",
-    });
+    setFormDate(filterDate || new Date().toISOString().split("T")[0]);
+    setFormStaffId("");
+    setLines([createNewLine()]);
     setShowForm(true);
+  }
+
+  function addLine() {
+    setLines([...lines, createNewLine()]);
+  }
+
+  function updateLine(id: string, field: keyof CollectionLine, value: string) {
+    setLines(lines.map((l) => (l.id === id ? { ...l, [field]: value } : l)));
+  }
+
+  function removeLine(id: string) {
+    if (lines.length > 1) {
+      setLines(lines.filter((l) => l.id !== id));
+    }
   }
 
   async function handleSave() {
     setSaving(true);
-    try {
-      const res = await fetch(`/api/companies/${companyId}/daily-cash`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          amount: parseFloat(form.amount) || 0,
-          staffId: form.staffId || undefined,
-        }),
-      });
-      if (res.ok) {
-        setShowForm(false);
-        await new Promise((r) => setTimeout(r, 300));
-        await fetchPayments();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        alert(`Failed: ${err.error || res.statusText}`);
+    let successCount = 0;
+    let failCount = 0;
+    for (const line of lines) {
+      const amt = parseFloat(line.amount);
+      if (!amt || amt <= 0) continue;
+      try {
+        const res = await fetch(`/api/companies/${companyId}/daily-cash`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            staffId: formStaffId || undefined,
+            date: formDate,
+            amount: amt,
+            category: line.category,
+            description: line.description || undefined,
+            receiptNo: line.receiptNo || undefined,
+            paymentMethod: line.paymentMethod,
+            fonepayRef: line.fonepayRef || undefined,
+          }),
+        });
+        if (res.ok) {
+          successCount++;
+        } else {
+          failCount++;
+          const err = await res.json().catch(() => ({}));
+          console.error("Line save failed:", err);
+        }
+      } catch (err) {
+        failCount++;
+        console.error("Daily cash save error:", err);
       }
-    } catch (err) {
-      console.error("Daily cash save error:", err);
+    }
+
+    if (successCount > 0) {
+      setShowForm(false);
+      await new Promise((r) => setTimeout(r, 300));
+      await fetchPayments();
+    }
+    if (failCount > 0) {
+      alert(`${successCount} entries saved, ${failCount} failed.`);
     }
     setSaving(false);
   }
 
   function getCategoryInfo(cat: string) {
-    return CASH_CATEGORIES.find((c) => c.value === cat) || { value: cat, label: cat, icon: "💵" };
+    return allCategories.find((c) => c.value === cat) || { value: cat, label: cat, icon: "💵" };
   }
+
+  const totalFormAmount = lines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -178,11 +263,11 @@ export default function DailyCashPage({ params }: PageProps) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Daily Cash Payments</h1>
-          <p className="text-sm text-muted-foreground">Track daily cash expenses for riders, fuel, food, and operations</p>
+          <h1 className="text-2xl font-bold">Daily Cash Collection & Payments</h1>
+          <p className="text-sm text-muted-foreground">Track daily cash collection, fonepay, and cash expenses for riders and operations</p>
         </div>
         <Button onClick={openForm}>
-          <Plus className="mr-2 h-4 w-4" /> Add Cash Payment
+          <Plus className="mr-2 h-4 w-4" /> Add Collection
         </Button>
       </div>
 
@@ -193,7 +278,7 @@ export default function DailyCashPage({ params }: PageProps) {
             <div className="flex items-center gap-2">
               <Banknote className="h-5 w-5 text-green-500" />
               <div>
-                <p className="text-xs text-muted-foreground">Total Cash Spent</p>
+                <p className="text-xs text-muted-foreground">Total Amount</p>
                 <p className="text-lg font-bold">{formatCurrency(totalSummary.total_amount, companyCurrency)}</p>
               </div>
             </div>
@@ -304,7 +389,7 @@ export default function DailyCashPage({ params }: PageProps) {
           onChange={(e) => setFilterCategory(e.target.value)}
         >
           <option value="">All Categories</option>
-          {CASH_CATEGORIES.map((c) => (
+          {allCategories.map((c) => (
             <option key={c.value} value={c.value}>{c.icon} {c.label}</option>
           ))}
         </select>
@@ -318,7 +403,7 @@ export default function DailyCashPage({ params }: PageProps) {
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
             </div>
           ) : payments.length === 0 ? (
-            <p className="py-8 text-center text-muted-foreground">No cash payments for this date/period.</p>
+            <p className="py-8 text-center text-muted-foreground">No cash entries for this date/period.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -326,10 +411,11 @@ export default function DailyCashPage({ params }: PageProps) {
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="p-3">Date</th>
                     <th className="p-3">Category</th>
+                    <th className="p-3">Payment</th>
                     <th className="p-3">Staff</th>
                     <th className="p-3">Description</th>
                     <th className="p-3 text-right">Amount</th>
-                    <th className="p-3">Receipt</th>
+                    <th className="p-3">Receipt/Ref</th>
                     <th className="p-3">Status</th>
                   </tr>
                 </thead>
@@ -342,6 +428,12 @@ export default function DailyCashPage({ params }: PageProps) {
                         <td className="p-3">
                           <span className="mr-1">{catInfo.icon}</span>
                           <span className="text-xs">{catInfo.label}</span>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="outline" className="text-xs">
+                            {p.paymentMethod === "fonepay" ? "📱 Fonepay" : p.paymentMethod === "cash" ? "💵 Cash" : (p.paymentMethod || "cash")}
+                          </Badge>
+                          {p.fonepayRef && <p className="text-xs text-muted-foreground mt-0.5">Ref: {p.fonepayRef}</p>}
                         </td>
                         <td className="p-3">
                           {p.staffName ? (
@@ -371,7 +463,7 @@ export default function DailyCashPage({ params }: PageProps) {
                 </tbody>
                 <tfoot>
                   <tr className="border-t bg-muted/30 font-semibold">
-                    <td className="p-3" colSpan={4}>Total</td>
+                    <td className="p-3" colSpan={5}>Total</td>
                     <td className="p-3 text-right">{formatCurrency(totalSummary.total_amount, companyCurrency)}</td>
                     <td className="p-3" colSpan={2}>{payments.length} entries</td>
                   </tr>
@@ -382,48 +474,29 @@ export default function DailyCashPage({ params }: PageProps) {
         </CardContent>
       </Card>
 
-      {/* Add Payment Modal */}
+      {/* Add Collection Modal — Multiple Lines */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="mx-4 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
+          <div className="mx-4 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">Add Cash Payment</h2>
+              <h2 className="text-lg font-bold">Add Cash Collection / Payment</h2>
               <button onClick={() => setShowForm(false)} className="rounded p-1 hover:bg-accent">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Date *</Label>
-                  <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Amount *</Label>
-                  <Input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0" />
-                </div>
-              </div>
-
+            {/* Common Fields */}
+            <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
-                <Label>Category</Label>
-                <select
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                >
-                  {CASH_CATEGORIES.map((c) => (
-                    <option key={c.value} value={c.value}>{c.icon} {c.label}</option>
-                  ))}
-                </select>
+                <Label>Date *</Label>
+                <Input type="date" value={formDate} onChange={(e) => setFormDate(e.target.value)} />
               </div>
-
               <div>
                 <Label>Staff (optional)</Label>
                 <select
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  value={form.staffId}
-                  onChange={(e) => setForm({ ...form, staffId: e.target.value })}
+                  value={formStaffId}
+                  onChange={(e) => setFormStaffId(e.target.value)}
                 >
                   <option value="">General (no specific staff)</option>
                   {staff.map((s) => (
@@ -431,31 +504,115 @@ export default function DailyCashPage({ params }: PageProps) {
                   ))}
                 </select>
               </div>
+            </div>
 
-              <div>
-                <Label>Description</Label>
-                <Input
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  placeholder="e.g. Petrol for rider delivery route"
-                />
-              </div>
-
-              <div>
-                <Label>Receipt No.</Label>
-                <Input
-                  value={form.receiptNo}
-                  onChange={(e) => setForm({ ...form, receiptNo: e.target.value })}
-                  placeholder="Optional"
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <Button variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
-                <Button onClick={handleSave} disabled={saving || !form.date || !form.amount}>
-                  {saving ? "Saving..." : "Add Payment"}
+            {/* Collection Lines */}
+            <div className="space-y-3 mb-4">
+              <div className="flex items-center justify-between">
+                <Label className="font-semibold">Collection Lines</Label>
+                <Button size="sm" variant="outline" onClick={addLine}>
+                  <Plus className="mr-1 h-3 w-3" /> Add Line
                 </Button>
               </div>
+
+              {lines.map((line, idx) => (
+                <div key={line.id} className="rounded-lg border p-3 space-y-3 bg-muted/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-muted-foreground">Line {idx + 1}</span>
+                    {lines.length > 1 && (
+                      <button onClick={() => removeLine(line.id)} className="text-red-500 hover:text-red-700 p-1">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <Label className="text-xs">Category</Label>
+                      <select
+                        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+                        value={line.category}
+                        onChange={(e) => updateLine(line.id, "category", e.target.value)}
+                      >
+                        {allCategories.map((c) => (
+                          <option key={c.value} value={c.value}>{c.icon} {c.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Payment Method</Label>
+                      <select
+                        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+                        value={line.paymentMethod}
+                        onChange={(e) => updateLine(line.id, "paymentMethod", e.target.value)}
+                      >
+                        <option value="cash">💵 Cash</option>
+                        <option value="fonepay">📱 Fonepay</option>
+                        <option value="bank">🏦 Bank Transfer</option>
+                        <option value="esewa">eSewa</option>
+                        <option value="khalti">Khalti</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Amount *</Label>
+                      <Input
+                        type="number"
+                        value={line.amount}
+                        onChange={(e) => updateLine(line.id, "amount", e.target.value)}
+                        placeholder="0"
+                        className="h-8"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Fonepay reference field — visible only when fonepay selected */}
+                  {line.paymentMethod === "fonepay" && (
+                    <div>
+                      <Label className="text-xs">Fonepay Reference ID</Label>
+                      <Input
+                        value={line.fonepayRef}
+                        onChange={(e) => updateLine(line.id, "fonepayRef", e.target.value)}
+                        placeholder="Fonepay transaction reference"
+                        className="h-8"
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Description</Label>
+                      <Input
+                        value={line.description}
+                        onChange={(e) => updateLine(line.id, "description", e.target.value)}
+                        placeholder="e.g. Delivery cash collection"
+                        className="h-8"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Receipt No.</Label>
+                      <Input
+                        value={line.receiptNo}
+                        onChange={(e) => updateLine(line.id, "receiptNo", e.target.value)}
+                        placeholder="Optional"
+                        className="h-8"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Total Preview */}
+            <div className="rounded-lg bg-primary/5 p-3 text-center mb-4">
+              <p className="text-xs text-muted-foreground">Total ({lines.filter(l => parseFloat(l.amount) > 0).length} items)</p>
+              <p className="text-xl font-bold">{formatCurrency(totalFormAmount, companyCurrency)}</p>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
+              <Button onClick={handleSave} disabled={saving || !formDate || totalFormAmount <= 0}>
+                {saving ? "Saving..." : `Add ${lines.filter(l => parseFloat(l.amount) > 0).length} Entries`}
+              </Button>
             </div>
           </div>
         </div>

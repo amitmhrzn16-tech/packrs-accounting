@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   Plus, AlertTriangle, CheckCircle, Clock, DollarSign, ArrowDownRight,
-  X, ChevronDown, ChevronUp
+  X, ChevronDown, ChevronUp, ShieldAlert, Send
 } from "lucide-react";
 
 interface Staff {
@@ -64,6 +64,8 @@ const RECOVERY_METHODS = [
   { value: "salary_deduction", label: "Salary Deduction" },
 ];
 
+const ADVANCE_LIMIT = 3000;
+
 interface PageProps {
   params: { companyId: string };
 }
@@ -87,6 +89,13 @@ export default function AdvancesPage({ params }: PageProps) {
     staffId: "", amount: "", paymentDate: "", paymentMethod: "cash",
     referenceNo: "", reason: "", recoveryDeadline: "", notes: "",
   });
+
+  // Confirmation step
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [staffAdvances, setStaffAdvances] = useState<Advance[]>([]);
+  const [staffMonthTotal, setStaffMonthTotal] = useState(0);
+  const [needsAdminApproval, setNeedsAdminApproval] = useState(false);
+  const [adminAlertSent, setAdminAlertSent] = useState(false);
 
   // Recovery form
   const [showRecoveryForm, setShowRecoveryForm] = useState(false);
@@ -129,7 +138,7 @@ export default function AdvancesPage({ params }: PageProps) {
       const p = new URLSearchParams();
       if (filterStaff) p.set("staffId", filterStaff);
       if (filterStatus) p.set("status", filterStatus);
-      p.set("_t", String(Date.now())); // cache-bust
+      p.set("_t", String(Date.now()));
       const res = await fetch(`/api/companies/${companyId}/advance-payments?${p}`, { cache: "no-store" });
       const data = await res.json();
       setAdvances(data.advances || []);
@@ -146,6 +155,9 @@ export default function AdvancesPage({ params }: PageProps) {
       staffId: "", amount: "", paymentDate: today, paymentMethod: "cash",
       referenceNo: "", reason: "", recoveryDeadline: "", notes: "",
     });
+    setShowConfirmation(false);
+    setNeedsAdminApproval(false);
+    setAdminAlertSent(false);
     setShowForm(true);
   }
 
@@ -159,6 +171,64 @@ export default function AdvancesPage({ params }: PageProps) {
       notes: "",
     });
     setShowRecoveryForm(true);
+  }
+
+  // Step 1: Check before creating — shows confirmation
+  function handleProceedToConfirmation() {
+    const amt = parseFloat(form.amount) || 0;
+    if (!form.staffId || amt <= 0) {
+      alert("Please select a staff member and enter a valid amount.");
+      return;
+    }
+
+    // Find existing unpaid advances for this staff member
+    const existingAdvances = advances.filter(
+      (a) => a.staff_id === form.staffId && a.status !== "recovered"
+    );
+    setStaffAdvances(existingAdvances);
+
+    // Calculate total advance this month for this staff
+    const currentMonth = form.paymentDate.substring(0, 7); // "YYYY-MM"
+    const monthAdvances = advances.filter(
+      (a) => a.staff_id === form.staffId && a.paymentDate.substring(0, 7) === currentMonth
+    );
+    const monthTotal = monthAdvances.reduce((s, a) => s + a.amount, 0) + amt;
+    setStaffMonthTotal(monthTotal);
+
+    // Check if over limit
+    const overLimit = monthTotal > ADVANCE_LIMIT;
+    setNeedsAdminApproval(overLimit);
+    setAdminAlertSent(false);
+
+    setShowConfirmation(true);
+  }
+
+  // Send Slack admin alert for over-limit advance
+  async function sendAdminAlert() {
+    try {
+      const staffMember = staff.find((s) => s.id === form.staffId);
+      const amt = parseFloat(form.amount) || 0;
+
+      // Fire a Slack notification via the advance-payments API with a special flag
+      await fetch(`/api/companies/${companyId}/advance-payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "admin_alert",
+          staffId: form.staffId,
+          staffName: staffMember?.name || "Unknown",
+          amount: amt,
+          monthTotal: staffMonthTotal,
+          limit: ADVANCE_LIMIT,
+          unpaidCount: staffAdvances.length,
+          unpaidTotal: staffAdvances.reduce((s, a) => s + a.dueAmount, 0),
+        }),
+      });
+      setAdminAlertSent(true);
+    } catch (err) {
+      console.error("Admin alert error:", err);
+      alert("Failed to send admin alert. Please try again.");
+    }
   }
 
   async function handleCreateAdvance() {
@@ -180,7 +250,7 @@ export default function AdvancesPage({ params }: PageProps) {
       });
       if (res.ok) {
         setShowForm(false);
-        // Small delay to ensure DB write is committed before re-fetching
+        setShowConfirmation(false);
         await new Promise((r) => setTimeout(r, 300));
         await fetchAdvances();
         await fetchStaff();
@@ -238,6 +308,10 @@ export default function AdvancesPage({ params }: PageProps) {
         return <Badge variant="outline">{status}</Badge>;
     }
   }
+
+  // Outstanding (unpaid) advances
+  const unpaidAdvances = advances.filter((a) => a.status !== "recovered");
+  const selectedFormStaff = staff.find((s) => s.id === form.staffId);
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -327,8 +401,41 @@ export default function AdvancesPage({ params }: PageProps) {
         </select>
       </div>
 
+      {/* Unpaid Advances Summary Banner */}
+      {unpaidAdvances.length > 0 && (
+        <Card className="border-red-200 bg-red-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-red-700 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              Unpaid Advances ({unpaidAdvances.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {unpaidAdvances.map((a) => (
+                <div key={a.id} className="flex items-center justify-between rounded-lg border border-red-200 bg-white p-2.5">
+                  <div>
+                    <p className="font-medium text-sm">{a.staffName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Given: {formatCurrency(a.amount, companyCurrency)} · {formatDate(a.paymentDate)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold text-red-600 text-sm">{formatCurrency(a.dueAmount, companyCurrency)}</p>
+                    <p className="text-xs text-muted-foreground">due</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Advances List */}
       <Card>
+        <CardHeader>
+          <CardTitle className="text-base">All Advance Records</CardTitle>
+        </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="flex justify-center py-8">
@@ -398,6 +505,11 @@ export default function AdvancesPage({ params }: PageProps) {
                       </div>
                     </div>
                   )}
+                  {expandedId === a.id && a.recoveries.length === 0 && (
+                    <div className="mt-3 rounded-lg border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">No recoveries recorded yet.</p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -405,8 +517,8 @@ export default function AdvancesPage({ params }: PageProps) {
         </CardContent>
       </Card>
 
-      {/* Create Advance Modal */}
-      {showForm && (
+      {/* Create Advance Modal — Step 1: Form */}
+      {showForm && !showConfirmation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="mx-4 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
@@ -418,6 +530,7 @@ export default function AdvancesPage({ params }: PageProps) {
 
             <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-700 mb-4">
               The advance amount will automatically be set as <strong>DUE</strong> (receivable) to the staff member.
+              Monthly limit per staff: <strong>{formatCurrency(ADVANCE_LIMIT, companyCurrency)}</strong>
             </div>
 
             <div className="space-y-4">
@@ -434,6 +547,33 @@ export default function AdvancesPage({ params }: PageProps) {
                   ))}
                 </select>
               </div>
+
+              {/* Show existing unpaid advances for selected staff inline */}
+              {form.staffId && (() => {
+                const existing = advances.filter(
+                  (a) => a.staff_id === form.staffId && a.status !== "recovered"
+                );
+                if (existing.length > 0) {
+                  const totalDue = existing.reduce((s, a) => s + a.dueAmount, 0);
+                  return (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+                      <p className="font-medium text-red-700 flex items-center gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {existing.length} unpaid advance(s) — Total due: {formatCurrency(totalDue, companyCurrency)}
+                      </p>
+                      <div className="mt-2 space-y-1">
+                        {existing.map((a) => (
+                          <div key={a.id} className="flex justify-between text-xs text-red-600">
+                            <span>{formatDate(a.paymentDate)} — {a.reason || "No reason"}</span>
+                            <span className="font-semibold">{formatCurrency(a.dueAmount, companyCurrency)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -482,10 +622,120 @@ export default function AdvancesPage({ params }: PageProps) {
 
               <div className="flex justify-end gap-3 pt-2">
                 <Button variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
-                <Button onClick={handleCreateAdvance} disabled={saving || !form.staffId || !form.amount}>
-                  {saving ? "Processing..." : "Give Advance"}
+                <Button onClick={handleProceedToConfirmation} disabled={!form.staffId || !form.amount}>
+                  Review & Confirm
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Advance Modal — Step 2: Confirmation */}
+      {showForm && showConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold">Confirm Advance Payment</h2>
+              <button onClick={() => { setShowForm(false); setShowConfirmation(false); }} className="rounded p-1 hover:bg-accent">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Over-limit Warning */}
+            {needsAdminApproval && (
+              <div className="rounded-lg border-2 border-red-300 bg-red-50 p-4 mb-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <ShieldAlert className="h-5 w-5 text-red-600" />
+                  <p className="font-bold text-red-700">Advance Limit Exceeded!</p>
+                </div>
+                <p className="text-sm text-red-600 mb-2">
+                  This advance will bring the monthly total for <strong>{selectedFormStaff?.name}</strong> to{" "}
+                  <strong>{formatCurrency(staffMonthTotal, companyCurrency)}</strong>, which exceeds the{" "}
+                  <strong>{formatCurrency(ADVANCE_LIMIT, companyCurrency)}</strong> monthly limit.
+                </p>
+                <p className="text-sm text-red-600 mb-3">
+                  Admin approval is required. Send an alert to the admin via Slack for verification.
+                </p>
+                {!adminAlertSent ? (
+                  <Button size="sm" variant="destructive" onClick={sendAdminAlert} className="flex items-center gap-1">
+                    <Send className="h-3.5 w-3.5" /> Send Admin Alert via Slack
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
+                    <CheckCircle className="h-4 w-4" /> Admin alert sent! You may proceed if authorized.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Advance Details */}
+            <div className="rounded-lg border p-4 mb-4 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Staff:</span>
+                <span className="font-medium">{selectedFormStaff?.name} ({selectedFormStaff?.role})</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Advance Amount:</span>
+                <span className="font-bold text-lg">{formatCurrency(parseFloat(form.amount) || 0, companyCurrency)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Payment Date:</span>
+                <span>{form.paymentDate}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Method:</span>
+                <span>{form.paymentMethod}</span>
+              </div>
+              {form.reason && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Reason:</span>
+                  <span>{form.reason}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Monthly Total (after this):</span>
+                <span className={staffMonthTotal > ADVANCE_LIMIT ? "text-red-600 font-bold" : "font-medium"}>
+                  {formatCurrency(staffMonthTotal, companyCurrency)}
+                </span>
+              </div>
+            </div>
+
+            {/* Existing Unpaid Advances */}
+            {staffAdvances.length > 0 && (
+              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 mb-4">
+                <p className="text-sm font-semibold text-orange-700 mb-2">
+                  {staffAdvances.length} Existing Unpaid Advance(s):
+                </p>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  {staffAdvances.map((a) => (
+                    <div key={a.id} className="flex justify-between text-xs bg-white rounded p-2 border border-orange-100">
+                      <div>
+                        <span className="font-medium">{formatDate(a.paymentDate)}</span>
+                        <span className="ml-2 text-muted-foreground">{a.reason || "No reason"}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-red-600 font-semibold">{formatCurrency(a.dueAmount, companyCurrency)}</span>
+                        <span className="text-muted-foreground ml-1">due</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs font-medium text-orange-700">
+                  Total unpaid: {formatCurrency(staffAdvances.reduce((s, a) => s + a.dueAmount, 0), companyCurrency)}
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setShowConfirmation(false)}>Back</Button>
+              <Button
+                onClick={handleCreateAdvance}
+                disabled={saving || (needsAdminApproval && !adminAlertSent)}
+                className={needsAdminApproval ? "bg-red-600 hover:bg-red-700" : ""}
+              >
+                {saving ? "Processing..." : needsAdminApproval ? "Confirm (Over Limit)" : "Confirm & Give Advance"}
+              </Button>
             </div>
           </div>
         </div>

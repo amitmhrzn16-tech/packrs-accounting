@@ -31,9 +31,20 @@ export async function GET(
     const staffId = url.searchParams.get("staffId");
     const status = url.searchParams.get("status");
 
-    let where = `ap.company_id = '${params.companyId}'`;
-    if (staffId) where += ` AND ap.staff_id = '${staffId}'`;
-    if (status) where += ` AND ap.status = '${status}'`;
+    // Build parameterized query
+    const conditions: string[] = ["ap.company_id = ?"];
+    const values: any[] = [params.companyId];
+
+    if (staffId) {
+      conditions.push("ap.staff_id = ?");
+      values.push(staffId);
+    }
+    if (status) {
+      conditions.push("ap.status = ?");
+      values.push(status);
+    }
+
+    const whereClause = conditions.join(" AND ");
 
     const advances: any[] = await prisma.$queryRawUnsafe(
       `SELECT ap.*, s.name as staff_name, s.role as staff_role,
@@ -41,8 +52,9 @@ export async function GET(
        FROM advance_payments ap
        LEFT JOIN staff s ON s.id = ap.staff_id
        LEFT JOIN users u ON u.id = ap.created_by
-       WHERE ${where}
-       ORDER BY ap.payment_date DESC`
+       WHERE ${whereClause}
+       ORDER BY ap.created_at DESC`,
+      ...values
     );
 
     // Get recoveries for each advance
@@ -57,20 +69,28 @@ export async function GET(
           a.id
         );
         return {
-          ...a,
-          staffName: a.staff_name,
-          staffRole: a.staff_role,
+          id: a.id,
+          staff_id: a.staff_id,
+          staffName: a.staff_name || "Unknown",
+          staffRole: a.staff_role || "staff",
+          amount: a.amount,
           paymentDate: a.payment_date,
           paymentMethod: a.payment_method,
           referenceNo: a.reference_no,
+          reason: a.reason,
           dueAmount: a.due_amount,
+          status: a.status,
           recoveryDeadline: a.recovery_deadline,
-          createdByName: a.created_by_name,
+          notes: a.notes,
+          createdByName: a.created_by_name || "System",
+          createdBy: a.created_by,
           createdAt: a.created_at,
           recoveries: recoveries.map((r: any) => ({
-            ...r,
+            id: r.id,
+            amount: r.amount,
             recoveryDate: r.recovery_date,
             recoveryMethod: r.recovery_method,
+            notes: r.notes,
             recoveredByName: r.recovered_by_name,
           })),
         };
@@ -83,7 +103,8 @@ export async function GET(
               COALESCE(SUM(amount), 0) as total_given,
               COALESCE(SUM(due_amount), 0) as total_outstanding,
               COALESCE(SUM(amount - due_amount), 0) as total_recovered
-       FROM advance_payments WHERE company_id = '${params.companyId}'`
+       FROM advance_payments WHERE company_id = ?`,
+      params.companyId
     );
 
     return NextResponse.json({
@@ -112,6 +133,26 @@ export async function POST(
     }
 
     const body = await request.json();
+
+    // Handle admin alert action (Slack notification for over-limit advances)
+    if (body.action === "admin_alert") {
+      const { staffName, amount: alertAmt, monthTotal, limit, unpaidCount, unpaidTotal } = body;
+      try {
+        const company: any[] = await prisma.$queryRawUnsafe(`SELECT currency FROM companies WHERE id = ?`, params.companyId);
+        const currency = company[0]?.currency || "NPR";
+        await notifySlack(
+          params.companyId,
+          `🚨 *ADVANCE LIMIT EXCEEDED — Admin Approval Required*\n` +
+          `> Staff: *${staffName}*\n` +
+          `> Requested: ${formatCurrency(Number(alertAmt), currency)}\n` +
+          `> Monthly Total (after this): ${formatCurrency(Number(monthTotal), currency)} — Limit: ${formatCurrency(Number(limit), currency)}\n` +
+          `> Unpaid advances: ${unpaidCount} totaling ${formatCurrency(Number(unpaidTotal), currency)}\n` +
+          `> ⚠️ Please verify and approve/deny this advance request.`
+        );
+      } catch {}
+      return NextResponse.json({ sent: true });
+    }
+
     const { staffId, amount, paymentDate, paymentMethod, referenceNo, reason, recoveryDeadline, notes } = body;
 
     if (!staffId || !amount || !paymentDate) {
@@ -120,45 +161,62 @@ export async function POST(
 
     const id = cuid();
     const now = new Date().toISOString();
+    const method = paymentMethod || "cash";
+    const refNo = referenceNo || "";
+    const reasonText = reason || "";
+    const deadline = recoveryDeadline || "";
+    const noteText = notes || "";
 
-    // Auto-set due_amount = amount (full amount is due)
+    // Use explicit SQL with no null params — SQLite/Prisma can be fussy with null bindings
     await prisma.$executeRawUnsafe(
-      `INSERT INTO advance_payments (id, company_id, staff_id, amount, payment_date, payment_method, reference_no, reason, due_amount, status, recovery_deadline, notes, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'due', ?, ?, ?, ?, ?)`,
-      id, params.companyId, staffId, amount, paymentDate,
-      paymentMethod || "cash", referenceNo || null, reason || null,
-      amount, // due_amount starts as full amount
-      recoveryDeadline || null, notes || null,
-      session.user.id, now, now
+      `INSERT INTO advance_payments
+        (id, company_id, staff_id, amount, payment_date, payment_method, reference_no, reason, due_amount, status, recovery_deadline, notes, created_by, created_at, updated_at)
+       VALUES
+        ('${id}', '${params.companyId}', '${staffId}', ${Number(amount)}, '${paymentDate}', '${method}', '${refNo}', '${reasonText}', ${Number(amount)}, 'due', '${deadline}', '${noteText}', '${session.user.id}', '${now}', '${now}')`
     );
+
+    // Verify the insert succeeded
+    const verify: any[] = await prisma.$queryRawUnsafe(
+      `SELECT id FROM advance_payments WHERE id = ?`, id
+    );
+    if (!verify.length) {
+      return NextResponse.json({ error: "Failed to create advance payment — database insert failed" }, { status: 500 });
+    }
 
     // Create expense transaction for accounting
     const txnId = "t" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO transactions (id, company_id, type, amount, particulars, date, payment_method, reference_no, created_by, source, created_at, updated_at)
-       VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, ?, 'web', ?, ?)`,
-      txnId, params.companyId, amount,
-      `Advance to staff${reason ? `: ${reason}` : ""}`,
-      paymentDate, paymentMethod || "cash", referenceNo || null,
-      session.user.id, now, now
-    );
+    try {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO transactions
+          (id, company_id, type, amount, particulars, date, payment_method, reference_no, created_by, source, created_at, updated_at)
+         VALUES
+          ('${txnId}', '${params.companyId}', 'expense', ${Number(amount)}, 'Advance: ${reasonText.replace(/'/g, "''")}', '${paymentDate}', '${method}', '${refNo}', '${session.user.id}', 'web', '${now}', '${now}')`
+      );
+    } catch (txnErr) {
+      console.error("Failed to create linked transaction (advance still created):", txnErr);
+    }
 
-    // Get staff & company info for Slack
-    const staffInfo: any[] = await prisma.$queryRawUnsafe(`SELECT name FROM staff WHERE id = ?`, staffId);
-    const company: any[] = await prisma.$queryRawUnsafe(`SELECT currency FROM companies WHERE id = ?`, params.companyId);
-    const currency = company[0]?.currency || "NPR";
+    // Slack notification (fire-and-forget)
+    try {
+      const staffInfo: any[] = await prisma.$queryRawUnsafe(`SELECT name FROM staff WHERE id = ?`, staffId);
+      const company: any[] = await prisma.$queryRawUnsafe(`SELECT currency FROM companies WHERE id = ?`, params.companyId);
+      const currency = company[0]?.currency || "NPR";
 
-    notifySlack(
-      params.companyId,
-      `⚠️ *Advance Given* to *${staffInfo[0]?.name || "Staff"}*\n` +
-      `> Amount: ${formatCurrency(amount, currency)} | Method: ${paymentMethod || "cash"}\n` +
-      `> Status: *DUE* (auto-set as receivable)${recoveryDeadline ? ` | Deadline: ${recoveryDeadline}` : ""}\n` +
-      `> ${reason || "No reason specified"}`
-    ).catch(() => {});
+      notifySlack(
+        params.companyId,
+        `⚠️ *Advance Given* to *${staffInfo[0]?.name || "Staff"}*\n` +
+        `> Amount: ${formatCurrency(Number(amount), currency)} | Method: ${method}\n` +
+        `> Status: *DUE* (auto-set as receivable)${deadline ? ` | Deadline: ${deadline}` : ""}\n` +
+        `> ${reasonText || "No reason specified"}`
+      ).catch(() => {});
+    } catch {}
 
-    return NextResponse.json({ id, dueAmount: amount, transactionId: txnId }, { status: 201 });
+    return NextResponse.json({ id, dueAmount: Number(amount), transactionId: txnId }, { status: 201 });
   } catch (error) {
     console.error("POST /advance-payments error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({
+      error: "Internal server error",
+      detail: error instanceof Error ? error.message : String(error),
+    }, { status: 500 });
   }
 }

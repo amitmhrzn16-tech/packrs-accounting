@@ -32,10 +32,14 @@ export async function GET(
     const month = url.searchParams.get("month");
     const status = url.searchParams.get("status");
 
-    let where = `sp.company_id = '${params.companyId}'`;
-    if (staffId) where += ` AND sp.staff_id = '${staffId}'`;
-    if (month) where += ` AND sp.month = '${month}'`;
-    if (status) where += ` AND sp.status = '${status}'`;
+    const conditions: string[] = ["sp.company_id = ?"];
+    const values: any[] = [params.companyId];
+
+    if (staffId) { conditions.push("sp.staff_id = ?"); values.push(staffId); }
+    if (month) { conditions.push("sp.month = ?"); values.push(month); }
+    if (status) { conditions.push("sp.status = ?"); values.push(status); }
+
+    const whereClause = conditions.join(" AND ");
 
     const payments: any[] = await prisma.$queryRawUnsafe(
       `SELECT sp.*, s.name as staff_name, s.role as staff_role, s.salary_amount as agreed_salary,
@@ -43,31 +47,43 @@ export async function GET(
        FROM salary_payments sp
        LEFT JOIN staff s ON s.id = sp.staff_id
        LEFT JOIN users u ON u.id = sp.created_by
-       WHERE ${where}
-       ORDER BY sp.payment_date DESC, s.name ASC`
+       WHERE ${whereClause}
+       ORDER BY sp.payment_date DESC, s.name ASC`,
+      ...values
     );
 
-    // Get summary
+    // Summary for the month filter
+    const summaryConditions: string[] = ["company_id = ?"];
+    const summaryValues: any[] = [params.companyId];
+    if (month) { summaryConditions.push("month = ?"); summaryValues.push(month); }
+
     const summary: any[] = await prisma.$queryRawUnsafe(
       `SELECT COUNT(*) as total_count,
               COALESCE(SUM(net_amount), 0) as total_paid,
               COALESCE(SUM(deductions), 0) as total_deductions,
               COALESCE(SUM(bonus), 0) as total_bonus
-       FROM salary_payments WHERE company_id = '${params.companyId}'
-       ${month ? `AND month = '${month}'` : ""}`
+       FROM salary_payments WHERE ${summaryConditions.join(" AND ")}`,
+      ...summaryValues
     );
 
     return NextResponse.json({
       payments: payments.map((p: any) => ({
-        ...p,
-        staffName: p.staff_name,
-        staffRole: p.staff_role,
-        agreedSalary: p.agreed_salary,
+        id: p.id,
+        staff_id: p.staff_id,
+        staffName: p.staff_name || "Unknown",
+        staffRole: p.staff_role || "staff",
+        agreedSalary: p.agreed_salary || 0,
+        amount: p.amount,
+        month: p.month,
         paymentDate: p.payment_date,
         paymentMethod: p.payment_method,
         referenceNo: p.reference_no,
+        deductions: p.deductions || 0,
+        bonus: p.bonus || 0,
         netAmount: p.net_amount,
-        createdByName: p.created_by_name,
+        status: p.status,
+        notes: p.notes,
+        createdByName: p.created_by_name || "System",
         createdBy: p.created_by,
         createdAt: p.created_at,
       })),
@@ -95,15 +111,35 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { staffId, amount, month, paymentDate, paymentMethod, referenceNo, deductions, bonus, notes, autoDeductAdvance } = body;
+    const {
+      staffId, amount, month, paymentDate, paymentMethod,
+      referenceNo, deductions, bonus, notes, autoDeductAdvance,
+      customDeductions, // { fieldName: amount } from settings
+    } = body;
 
     if (!staffId || !amount || !month || !paymentDate) {
       return NextResponse.json({ error: "staffId, amount, month, paymentDate are required" }, { status: 400 });
     }
 
-    const dedAmt = deductions || 0;
-    const bonusAmt = bonus || 0;
-    let netAmount = amount - dedAmt + bonusAmt;
+    const grossAmount = Number(amount);
+    const bonusAmt = Number(bonus) || 0;
+
+    // Calculate custom deductions total
+    let customDedTotal = 0;
+    const customDedNotes: string[] = [];
+    if (customDeductions && typeof customDeductions === "object") {
+      for (const [field, val] of Object.entries(customDeductions)) {
+        const v = Number(val) || 0;
+        if (v > 0) {
+          customDedTotal += v;
+          customDedNotes.push(`${field}: ${v}`);
+        }
+      }
+    }
+
+    const baseDed = Number(deductions) || 0;
+    let totalDeductions = baseDed + customDedTotal;
+    let netAmount = grossAmount - totalDeductions + bonusAmt;
 
     // Auto-deduct pending advances if requested
     let advanceDeduction = 0;
@@ -113,88 +149,89 @@ export async function POST(
         staffId
       );
 
-      let remaining = netAmount * 0.25; // max 25% of salary for advance recovery
+      let remaining = grossAmount * 0.25; // max 25% of gross for advance recovery
       for (const adv of pendingAdvances) {
         if (remaining <= 0) break;
         const recoveryAmount = Math.min(adv.due_amount, remaining);
         const newDue = adv.due_amount - recoveryAmount;
-        const newStatus = newDue <= 0 ? "recovered" : "partially_recovered";
+        const newStatus = newDue <= 0.01 ? "recovered" : "partially_recovered";
 
-        // Create recovery record
         const recId = "ar" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        const now2 = new Date().toISOString();
         await prisma.$executeRawUnsafe(
-          `INSERT INTO advance_recoveries (id, advance_id, amount, recovery_date, recovery_method, salary_payment_id, notes, created_by, created_at)
-           VALUES (?, ?, ?, ?, 'salary_deduction', NULL, ?, ?, ?)`,
-          recId, adv.id, recoveryAmount, paymentDate, `Auto-deducted from ${month} salary`, session.user.id, new Date().toISOString()
+          `INSERT INTO advance_recoveries (id, advance_id, amount, recovery_date, recovery_method, notes, created_by, created_at)
+           VALUES ('${recId}', '${adv.id}', ${recoveryAmount}, '${paymentDate}', 'salary_deduction', 'Auto-deducted from ${month} salary', '${session.user.id}', '${now2}')`
         );
-
-        // Update advance
         await prisma.$executeRawUnsafe(
-          `UPDATE advance_payments SET due_amount = ?, status = ?, updated_at = ? WHERE id = ?`,
-          newDue, newStatus, new Date().toISOString(), adv.id
+          `UPDATE advance_payments SET due_amount = ${newDue}, status = '${newStatus}', updated_at = '${now2}' WHERE id = '${adv.id}'`
         );
 
         advanceDeduction += recoveryAmount;
         remaining -= recoveryAmount;
       }
 
+      totalDeductions += advanceDeduction;
       netAmount -= advanceDeduction;
     }
 
     const id = cuid();
     const now = new Date().toISOString();
+    const method = paymentMethod || "cash";
+    const refNo = referenceNo || "";
+    const allNotes = [
+      notes || "",
+      customDedNotes.length ? `Custom: ${customDedNotes.join(", ")}` : "",
+      advanceDeduction > 0 ? `Advance recovery: ${advanceDeduction}` : "",
+    ].filter(Boolean).join(" | ");
 
+    // Insert salary payment
     await prisma.$executeRawUnsafe(
-      `INSERT INTO salary_payments (id, company_id, staff_id, amount, month, payment_date, payment_method, reference_no, deductions, bonus, net_amount, status, notes, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, ?, ?)`,
-      id, params.companyId, staffId, amount, month, paymentDate,
-      paymentMethod || "cash", referenceNo || null,
-      dedAmt + advanceDeduction, bonusAmt, netAmount,
-      notes || null, session.user.id, now, now
+      `INSERT INTO salary_payments
+        (id, company_id, staff_id, amount, month, payment_date, payment_method, reference_no, deductions, bonus, net_amount, status, notes, created_by, created_at, updated_at)
+       VALUES
+        ('${id}', '${params.companyId}', '${staffId}', ${grossAmount}, '${month}', '${paymentDate}', '${method}', '${refNo}', ${totalDeductions}, ${bonusAmt}, ${netAmount}, 'paid', '${allNotes.replace(/'/g, "''")}', '${session.user.id}', '${now}', '${now}')`
     );
 
-    // Also create a corresponding expense transaction for accounting
+    // Also create a corresponding expense transaction
     const txnId = "t" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO transactions (id, company_id, type, amount, particulars, date, payment_method, reference_no, created_by, source, created_at, updated_at)
-       VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, ?, 'web', ?, ?)`,
-      txnId, params.companyId, netAmount,
-      `Salary: ${month}${advanceDeduction > 0 ? ` (Advance deducted: ${advanceDeduction})` : ""}`,
-      paymentDate, paymentMethod || "cash", referenceNo || null,
-      session.user.id, now, now
-    );
+    try {
+      const particulars = `Salary: ${month}${advanceDeduction > 0 ? ` (Adv deducted: ${advanceDeduction})` : ""}`;
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO transactions
+          (id, company_id, type, amount, particulars, date, payment_method, reference_no, created_by, source, created_at, updated_at)
+         VALUES
+          ('${txnId}', '${params.companyId}', 'expense', ${netAmount}, '${particulars.replace(/'/g, "''")}', '${paymentDate}', '${method}', '${refNo}', '${session.user.id}', 'web', '${now}', '${now}')`
+      );
+    } catch (txnErr) {
+      console.error("Failed to create linked transaction:", txnErr);
+    }
 
-    // Update salary_payment with transaction link (notes field)
-    await prisma.$executeRawUnsafe(
-      `UPDATE salary_payments SET notes = COALESCE(notes, '') || ? WHERE id = ?`,
-      advanceDeduction > 0 ? ` | Advance recovery: ${advanceDeduction} | Txn: ${txnId}` : ` | Txn: ${txnId}`,
-      id
-    );
+    // Slack
+    try {
+      const company: any[] = await prisma.$queryRawUnsafe(`SELECT name, currency FROM companies WHERE id = ?`, params.companyId);
+      const currency = company[0]?.currency || "NPR";
+      const staffInfo: any[] = await prisma.$queryRawUnsafe(`SELECT name FROM staff WHERE id = ?`, staffId);
 
-    // Get company currency for Slack
-    const company: any[] = await prisma.$queryRawUnsafe(
-      `SELECT name, currency FROM companies WHERE id = ?`, params.companyId
-    );
-    const currency = company[0]?.currency || "NPR";
-    const staffInfo: any[] = await prisma.$queryRawUnsafe(
-      `SELECT name FROM staff WHERE id = ?`, staffId
-    );
-
-    notifySlack(
-      params.companyId,
-      `💰 *Salary Paid* to *${staffInfo[0]?.name || "Staff"}* for ${month}\n` +
-      `> Gross: ${formatCurrency(amount, currency)} | Deductions: ${formatCurrency(dedAmt + advanceDeduction, currency)} | Net: ${formatCurrency(netAmount, currency)}\n` +
-      `> Method: ${paymentMethod || "cash"}${advanceDeduction > 0 ? ` | Advance recovered: ${formatCurrency(advanceDeduction, currency)}` : ""}`
-    ).catch(() => {});
+      notifySlack(
+        params.companyId,
+        `💰 *Salary Paid* to *${staffInfo[0]?.name || "Staff"}* for ${month}\n` +
+        `> Gross: ${formatCurrency(grossAmount, currency)} | Deductions: ${formatCurrency(totalDeductions, currency)} | Net: ${formatCurrency(netAmount, currency)}\n` +
+        `> Method: ${method}${advanceDeduction > 0 ? ` | Advance recovered: ${formatCurrency(advanceDeduction, currency)}` : ""}`
+      ).catch(() => {});
+    } catch {}
 
     return NextResponse.json({
       id,
       netAmount,
       advanceDeduction,
+      totalDeductions,
       transactionId: txnId,
     }, { status: 201 });
   } catch (error) {
     console.error("POST /salary-payments error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({
+      error: "Internal server error",
+      detail: error instanceof Error ? error.message : String(error),
+    }, { status: 500 });
   }
 }
