@@ -134,11 +134,12 @@ CREATE INDEX IF NOT EXISTS idx_contra_company ON contra_entries(company_id, entr
 CREATE TABLE IF NOT EXISTS bank_accounts (
   id TEXT PRIMARY KEY,
   company_id TEXT NOT NULL,
-  account_name TEXT NOT NULL,      -- e.g. "Laxmi Bank - Main", "NMB Savings"
+  account_name TEXT NOT NULL,      -- e.g. "Laxmi Bank - Main", "NMB Savings", "eSewa Wallet"
   account_number TEXT DEFAULT '',
   bank_name TEXT DEFAULT '',
   branch TEXT DEFAULT '',
   account_type TEXT DEFAULT 'current', -- 'current','savings','fixed'
+  payment_method TEXT DEFAULT 'bank',  -- links to transaction payment methods: 'bank','cash','esewa','khalti','fonepay','cheque'
   opening_balance REAL DEFAULT 0,
   is_active INTEGER DEFAULT 1,
   created_at TEXT NOT NULL,

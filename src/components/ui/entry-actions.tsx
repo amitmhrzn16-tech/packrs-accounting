@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,19 +62,37 @@ export function EntryActions({
   canApprove = true,
 }: EntryActionsProps) {
   const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const handleOpen = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      // Position dropdown below the button, aligned to the right
+      setMenuPos({
+        top: rect.bottom + 4,
+        left: Math.max(8, rect.right - 176), // 176 = w-44 (11rem)
+      });
+    }
+    setOpen(!open);
+  };
 
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        ref={btnRef}
+        onClick={handleOpen}
         className="p-1 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-800 transition-colors"
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-8 z-50 w-44 bg-white rounded-lg shadow-lg border py-1 text-sm">
+          <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[80] w-44 bg-white rounded-lg shadow-lg border py-1 text-sm"
+            style={{ top: menuPos.top, left: menuPos.left }}
+          >
             {canEdit && onEdit && (
               <button
                 onClick={() => { setOpen(false); onEdit(); }}

@@ -388,7 +388,7 @@ export async function DELETE(
     }
 
     // Only editors and admins can delete
-    if (!["admin", "editor"].includes(access.role)) {
+    if (access.role === "viewer") {
       return NextResponse.json({ error: "You do not have permission to delete transactions" }, { status: 403 });
     }
 

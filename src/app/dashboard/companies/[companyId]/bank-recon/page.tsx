@@ -31,6 +31,7 @@ interface BankAccount {
   bankName: string;
   branch: string | null;
   accountType: string;
+  paymentMethod: string;
   openingBalance: number;
   isActive: boolean;
 }
@@ -85,6 +86,7 @@ export default function BankReconPage({ params }: PageProps) {
     bankName: '',
     branch: '',
     accountType: 'savings',
+    paymentMethod: 'bank',
     openingBalance: '',
   });
 
@@ -102,6 +104,16 @@ export default function BankReconPage({ params }: PageProps) {
   useEffect(() => {
     loadCompanyData();
   }, [companyId]);
+
+  // Auto-set payment method filter when account changes
+  useEffect(() => {
+    if (selectedAccount) {
+      const acct = bankAccounts.find((a) => a.id === selectedAccount);
+      if (acct) {
+        setPaymentMethodFilter(acct.paymentMethod || 'bank');
+      }
+    }
+  }, [selectedAccount, bankAccounts]);
 
   // Load reconciliation data when account or payment method selected
   useEffect(() => {
@@ -211,6 +223,7 @@ export default function BankReconPage({ params }: PageProps) {
       bankName: account.bankName,
       branch: account.branch || '',
       accountType: account.accountType,
+      paymentMethod: account.paymentMethod || 'bank',
       openingBalance: account.openingBalance.toString(),
     });
     setShowAddAccount(true);
@@ -359,6 +372,7 @@ export default function BankReconPage({ params }: PageProps) {
                     bankName: '',
                     branch: '',
                     accountType: 'savings',
+                    paymentMethod: 'bank',
                     openingBalance: '',
                   });
                   setShowAddAccount(true);
@@ -424,6 +438,12 @@ export default function BankReconPage({ params }: PageProps) {
                         <p className="font-semibold text-lg">
                           {formatCurrency(account.openingBalance)}
                         </p>
+                      </div>
+                      <div className="text-sm">
+                        <p className="text-gray-600">Payment Method</p>
+                        <Badge variant="secondary" className="text-xs">
+                          {(account.paymentMethod || 'bank').charAt(0).toUpperCase() + (account.paymentMethod || 'bank').slice(1)}
+                        </Badge>
                       </div>
                       {account.branch && (
                         <p className="text-xs text-gray-500">Branch: {account.branch}</p>
@@ -670,6 +690,26 @@ export default function BankReconPage({ params }: PageProps) {
                   <option value="checking">Checking</option>
                   <option value="current">Current</option>
                 </select>
+              </div>
+              <div>
+                <Label htmlFor="paymentMethod">Linked Payment Method</Label>
+                <select
+                  id="paymentMethod"
+                  value={accountForm.paymentMethod}
+                  onChange={(e) =>
+                    setAccountForm({ ...accountForm, paymentMethod: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border rounded-md"
+                >
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m.charAt(0).toUpperCase() + m.slice(1)}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Transactions with this payment method will be shown for reconciliation
+                </p>
               </div>
               <div>
                 <Label htmlFor="openingBalance">Opening Balance</Label>

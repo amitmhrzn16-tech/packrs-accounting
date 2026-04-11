@@ -33,6 +33,13 @@ export async function GET(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    // Self-healing migration: ensure payment_method column exists
+    try {
+      await prisma.$executeRawUnsafe(`ALTER TABLE bank_accounts ADD COLUMN payment_method TEXT DEFAULT 'bank'`);
+    } catch (_) {
+      // Column already exists
+    }
+
     const accounts = await prisma.$queryRawUnsafe<
       Array<{
         id: string;
@@ -41,11 +48,12 @@ export async function GET(request: Request, { params }: RouteParams) {
         bank_name: string;
         branch: string | null;
         account_type: string;
+        payment_method: string | null;
         opening_balance: number;
         is_active: number;
       }>
     >(
-      `SELECT id, account_name, account_number, bank_name, branch, account_type, opening_balance, is_active
+      `SELECT id, account_name, account_number, bank_name, branch, account_type, COALESCE(payment_method, 'bank') as payment_method, opening_balance, is_active
        FROM bank_accounts
        WHERE company_id = ?
        ORDER BY created_at DESC`,
@@ -59,6 +67,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       bankName: acc.bank_name,
       branch: acc.branch,
       accountType: acc.account_type,
+      paymentMethod: acc.payment_method || "bank",
       openingBalance: Number(acc.opening_balance),
       isActive: acc.is_active === 1,
     }));
@@ -96,6 +105,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       bankName,
       branch,
       accountType,
+      paymentMethod,
       openingBalance,
     } = body;
 
@@ -138,11 +148,13 @@ export async function POST(request: Request, { params }: RouteParams) {
       );
     }
 
+    const pmVal = paymentMethod || "bank";
+
     await prisma.$executeRawUnsafe(
       `INSERT INTO bank_accounts (
         id, company_id, account_name, account_number, bank_name, branch,
-        account_type, opening_balance, is_active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))`,
+        account_type, payment_method, opening_balance, is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))`,
       id,
       params.companyId,
       escapedAccountName,
@@ -150,6 +162,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       escapedBankName,
       escapedBranch,
       escapedAccountType,
+      pmVal,
       openingBalanceNum
     );
 
@@ -160,6 +173,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       bankName,
       branch: branchVal,
       accountType,
+      paymentMethod: pmVal,
       openingBalance: openingBalanceNum,
       isActive: true,
     });
@@ -189,7 +203,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     }
 
     const body = await request.json();
-    const { id, accountName, accountNumber, bankName, branch, accountType, openingBalance } = body;
+    const { id, accountName, accountNumber, bankName, branch, accountType, paymentMethod, openingBalance } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -252,6 +266,10 @@ export async function PUT(request: Request, { params }: RouteParams) {
     if (openingBalance !== undefined) {
       updates.push("opening_balance = ?");
       values.push(parseFloat(String(openingBalance)) || 0);
+    }
+    if (paymentMethod !== undefined) {
+      updates.push("payment_method = ?");
+      values.push(paymentMethod);
     }
 
     if (updates.length === 0) {
