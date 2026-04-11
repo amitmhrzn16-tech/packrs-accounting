@@ -23,6 +23,9 @@ import {
   Banknote,
   HandCoins,
   Coins,
+  ArrowLeftRight,
+  Repeat,
+  Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -83,8 +86,23 @@ export function Sidebar({ companyId, companyName }: SidebarProps) {
           icon: Coins,
         },
         {
-          href: `/dashboard/companies/${companyId}/reconciliation`,
+          href: `/dashboard/companies/${companyId}/intercompany`,
+          label: "Intercompany",
+          icon: ArrowLeftRight,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/contra`,
+          label: "Contra Entries",
+          icon: Repeat,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/bank-recon`,
           label: "Bank Reconciliation",
+          icon: Landmark,
+        },
+        {
+          href: `/dashboard/companies/${companyId}/reconciliation`,
+          label: "Legacy Reconciliation",
           icon: FileSpreadsheet,
         },
         {

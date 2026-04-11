@@ -47,6 +47,7 @@ model Company {
   users                CompanyUser[]
   categories           Category[]
   transactions         Transaction[]
+  bankAccounts         BankAccount[]
   bankTransactions     BankTransaction[]
   importBatches        ImportBatch[]
   auditLogs            AuditLog[]
@@ -55,6 +56,7 @@ model Company {
   dmsSyncedTransactions   DmsSyncedTransaction[]
   paymentMethodBalances   PaymentMethodBalance[]
   chatMessages            ChatMessage[]
+  bankReconciliations  BankReconciliation[]
 
   @@map("companies")
 }
@@ -100,6 +102,7 @@ model Transaction {
   referenceNo   String?  @map("reference_no")
   attachmentUrl String?  @map("attachment_url")
   isReconciled  Boolean  @default(false) @map("is_reconciled")
+  bankAccountId String?  @map("bank_account_id")
   bankTxnId     String?  @map("bank_txn_id")
   createdById   String   @map("created_by")
   source        String   @default("web") // web, slack, import
@@ -148,6 +151,44 @@ model TransactionComment {
 
   @@index([transactionId])
   @@map("transaction_comments")
+}
+
+model BankAccount {
+  id              String   @id @default(cuid())
+  companyId       String   @map("company_id")
+  accountName     String   @map("account_name")
+  accountNumber   String   @map("account_number")
+  bankName        String   @map("bank_name")
+  branch          String?
+  accountType     String   @map("account_type") // savings, checking, current
+  openingBalance  Float    @default(0) @map("opening_balance")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company           Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reconciliations   BankReconciliation[]
+
+  @@unique([companyId, accountNumber])
+  @@map("bank_accounts")
+}
+
+model BankReconciliation {
+  id                String   @id @default(cuid())
+  companyId         String   @map("company_id")
+  bankAccountId     String   @map("bank_account_id")
+  reconciliationDate String  @map("reconciliation_date") // YYYY-MM-DD
+  statementBalance  Float    @map("statement_balance")
+  bookBalance       Float    @map("book_balance")
+  difference        Float    @default(0)
+  status            String   @default("draft") // draft, completed
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankAccount   BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+
+  @@map("bank_reconciliations")
 }
 
 model BankTransaction {

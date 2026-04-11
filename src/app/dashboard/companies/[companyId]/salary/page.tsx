@@ -11,9 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   Plus, DollarSign, Calendar, Users, TrendingDown, X, CheckCircle,
-  AlertTriangle, Settings, Minus, PlusCircle
+  AlertTriangle, Settings, Minus, PlusCircle, MoreVertical, Edit2, Trash2,
+  CheckCheck, XCircle, Eye
 } from "lucide-react";
 import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
+import { ApprovalBadge, EntryActions, EntryLogViewer, ConfirmDeleteDialog } from "@/components/ui/entry-actions";
 
 interface Staff {
   id: string;
@@ -39,6 +41,9 @@ interface SalaryPayment {
   bonus: number;
   netAmount: number;
   status: string;
+  approvalStatus?: string;
+  advanceDeducted?: number;
+  advanceInterest?: number;
   notes?: string;
   attachmentUrl?: string;
   createdByName: string;
@@ -87,16 +92,24 @@ export default function SalaryPage({ params }: PageProps) {
   // Form
   const [showForm, setShowForm] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
     staffId: "", amount: "", month: "", paymentDate: "",
     paymentMethod: "cash", referenceNo: "", notes: "", attachmentUrl: "",
-    autoDeductAdvance: true,
+    autoDeductAdvance: true, maxAdvanceDeduction: "",
   });
   const [viewAttachment, setViewAttachment] = useState("");
   // Dynamic fields state: { fieldName: "amount" }
   const [customDeductions, setCustomDeductions] = useState<Record<string, string>>({});
   const [customBonuses, setCustomBonuses] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  // Entry log viewer
+  const [showLogViewer, setShowLogViewer] = useState(false);
+  const [logViewerId, setLogViewerId] = useState<string | null>(null);
+
+  // Delete confirmation
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCompany();
@@ -155,10 +168,11 @@ export default function SalaryPage({ params }: PageProps) {
 
   function openSingleForm(s?: Staff) {
     const today = new Date().toISOString().split("T")[0];
+    setEditingId(null);
     setForm({
       staffId: s?.id || "", amount: s ? String(s.salaryAmount) : "",
       month: filterMonth, paymentDate: today, paymentMethod: "cash",
-      referenceNo: "", notes: "", attachmentUrl: "",
+      referenceNo: "", notes: "", attachmentUrl: "", maxAdvanceDeduction: "",
       autoDeductAdvance: true,
     });
     // Initialize custom fields with defaults
@@ -167,6 +181,31 @@ export default function SalaryPage({ params }: PageProps) {
     setCustomDeductions(ded);
     const bon: Record<string, string> = {};
     bonusFields.forEach((f) => { bon[f.fieldName] = f.defaultValue || "0"; });
+    setCustomBonuses(bon);
+    setShowForm(true);
+    setShowBulkForm(false);
+  }
+
+  function openEditForm(p: SalaryPayment) {
+    setEditingId(p.id);
+    setForm({
+      staffId: p.staff_id,
+      amount: String(p.amount),
+      month: p.month,
+      paymentDate: p.paymentDate,
+      paymentMethod: p.paymentMethod,
+      referenceNo: p.referenceNo || "",
+      notes: p.notes || "",
+      attachmentUrl: p.attachmentUrl || "",
+      maxAdvanceDeduction: "",
+      autoDeductAdvance: true,
+    });
+    // Initialize custom fields from payment
+    const ded: Record<string, string> = {};
+    deductionFields.forEach((f) => { ded[f.fieldName] = "0"; });
+    setCustomDeductions(ded);
+    const bon: Record<string, string> = {};
+    bonusFields.forEach((f) => { bon[f.fieldName] = "0"; });
     setCustomBonuses(bon);
     setShowForm(true);
     setShowBulkForm(false);
@@ -188,17 +227,29 @@ export default function SalaryPage({ params }: PageProps) {
         totalCustomBonus += parseFloat(val) || 0;
       }
 
+      const payload: any = {
+        ...form,
+        amount: parseFloat(form.amount) || 0,
+        deductions: 0,
+        bonus: totalCustomBonus,
+        customDeductions: allCustomDed,
+        attachmentUrl: form.attachmentUrl || undefined,
+      };
+
+      if (form.maxAdvanceDeduction) {
+        payload.advanceDeductionOverride = parseFloat(form.maxAdvanceDeduction) || 0;
+      }
+
+      const method = editingId ? "PUT" : "POST";
+      if (editingId) {
+        payload.id = editingId;
+        payload.action = "edit";
+      }
+
       const res = await fetch(`/api/companies/${companyId}/salary-payments`, {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          amount: parseFloat(form.amount) || 0,
-          deductions: 0, // base deductions set to 0 — all via customDeductions
-          bonus: totalCustomBonus,
-          customDeductions: allCustomDed,
-          attachmentUrl: form.attachmentUrl || undefined,
-        }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         setShowForm(false);
@@ -249,6 +300,45 @@ export default function SalaryPage({ params }: PageProps) {
     fetchStaff();
     setSaving(false);
     alert(`Bulk salary paid for ${successCount} staff members.`);
+  }
+
+  async function handleDeletePayment(id: string) {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/salary-payments?id=${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        await fetchPayments();
+        await fetchStaff();
+      } else {
+        alert("Failed to delete payment");
+      }
+    } catch (err) {
+      console.error("Delete error:", err);
+    }
+    setDeleteConfirm(null);
+  }
+
+  async function handleApprovalAction(id: string, action: "approve" | "reject") {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/salary-payments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action }),
+      });
+      if (res.ok) {
+        await fetchPayments();
+      } else {
+        alert(`Failed to ${action} payment`);
+      }
+    } catch (err) {
+      console.error("Approval error:", err);
+    }
+  }
+
+  function handleViewLog(id: string) {
+    setLogViewerId(id);
+    setShowLogViewer(true);
   }
 
   const selectedStaff = staff.find((s) => s.id === form.staffId);
@@ -388,6 +478,8 @@ export default function SalaryPage({ params }: PageProps) {
                     <th className="pb-2 pr-4">Date</th>
                     <th className="pb-2 pr-2">File</th>
                     <th className="pb-2">Status</th>
+                    <th className="pb-2">Approval</th>
+                    <th className="pb-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -421,6 +513,52 @@ export default function SalaryPage({ params }: PageProps) {
                         <Badge className={p.status === "paid" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}>
                           {p.status}
                         </Badge>
+                      </td>
+                      <td className="py-2">
+                        <ApprovalBadge status={p.approvalStatus || "pending"} />
+                      </td>
+                      <td className="py-2">
+                        <div className="relative group">
+                          <button className="p-1 hover:bg-gray-100 rounded">
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+                          <div className="hidden group-hover:block absolute right-0 top-full mt-1 z-10 bg-white border rounded shadow-lg text-sm">
+                            <button
+                              onClick={() => openEditForm(p)}
+                              className="flex items-center gap-2 w-full px-3 py-2 hover:bg-gray-50 text-left"
+                            >
+                              <Edit2 className="h-3.5 w-3.5" /> Edit
+                            </button>
+                            {p.approvalStatus !== "approved" && (
+                              <button
+                                onClick={() => handleApprovalAction(p.id, "approve")}
+                                className="flex items-center gap-2 w-full px-3 py-2 hover:bg-gray-50 text-left text-green-600"
+                              >
+                                <CheckCheck className="h-3.5 w-3.5" /> Approve
+                              </button>
+                            )}
+                            {p.approvalStatus !== "rejected" && (
+                              <button
+                                onClick={() => handleApprovalAction(p.id, "reject")}
+                                className="flex items-center gap-2 w-full px-3 py-2 hover:bg-gray-50 text-left text-red-600"
+                              >
+                                <XCircle className="h-3.5 w-3.5" /> Reject
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleViewLog(p.id)}
+                              className="flex items-center gap-2 w-full px-3 py-2 hover:bg-gray-50 text-left"
+                            >
+                              <Eye className="h-3.5 w-3.5" /> View Log
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirm(p.id)}
+                              className="flex items-center gap-2 w-full px-3 py-2 hover:bg-gray-50 text-left text-red-600"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Delete
+                            </button>
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -463,7 +601,7 @@ export default function SalaryPage({ params }: PageProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">Pay Salary</h2>
+              <h2 className="text-lg font-bold">{editingId ? "Edit Salary Payment" : "Pay Salary"}</h2>
               <button onClick={() => setShowForm(false)} className="rounded p-1 hover:bg-accent">
                 <X className="h-5 w-5" />
               </button>
@@ -509,6 +647,21 @@ export default function SalaryPage({ params }: PageProps) {
                     <p className="text-xs text-red-500 mt-1">
                       Will deduct: {formatCurrency(advanceDeductPreview, companyCurrency)} from this salary
                     </p>
+                  )}
+                  {form.autoDeductAdvance && (
+                    <div className="mt-3 pt-3 border-t border-red-300">
+                      <Label className="text-xs text-red-700 font-semibold">Max Advance Deduction Override (leave blank for 25%)</Label>
+                      <Input
+                        type="number"
+                        placeholder="Leave blank to use default 25%"
+                        value={form.maxAdvanceDeduction}
+                        onChange={(e) => setForm({ ...form, maxAdvanceDeduction: e.target.value })}
+                        className="mt-1 h-8"
+                      />
+                      <p className="text-xs text-red-600 mt-1">
+                        Max deductible: {formatCurrency(selectedStaff.totalAdvanceDue, companyCurrency)}
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
@@ -598,9 +751,15 @@ export default function SalaryPage({ params }: PageProps) {
                     </div>
                   )}
                   {advanceDeductPreview > 0 && (
-                    <div className="flex justify-between text-orange-600">
-                      <span>Advance Recovery</span>
-                      <span>-{formatCurrency(advanceDeductPreview, companyCurrency)}</span>
+                    <div className="flex flex-col gap-1 text-orange-600">
+                      <div className="flex justify-between">
+                        <span>Advance Recovery</span>
+                        <span>-{formatCurrency(advanceDeductPreview, companyCurrency)}</span>
+                      </div>
+                      {/* Interest display placeholder — would be populated if applicable */}
+                      <div className="text-xs text-orange-500 italic">
+                        (Interest calculated based on advance terms)
+                      </div>
                     </div>
                   )}
                   {totalCustomBon > 0 && (
@@ -660,7 +819,7 @@ export default function SalaryPage({ params }: PageProps) {
               <div className="flex justify-end gap-3 pt-2">
                 <Button variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
                 <Button onClick={handleSaveSingle} disabled={saving || !form.staffId || !form.amount}>
-                  {saving ? "Processing..." : "Pay Salary"}
+                  {saving ? "Processing..." : editingId ? "Update Payment" : "Pay Salary"}
                 </Button>
               </div>
             </div>
@@ -705,6 +864,30 @@ export default function SalaryPage({ params }: PageProps) {
       {/* Attachment Viewer */}
       {viewAttachment && (
         <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
+      )}
+
+      {/* Entry Log Viewer */}
+      {showLogViewer && logViewerId && (
+        <EntryLogViewer
+          companyId={companyId}
+          module="salary"
+          entryId={logViewerId}
+          onClose={() => {
+            setShowLogViewer(false);
+            setLogViewerId(null);
+          }}
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirm && (
+        <ConfirmDeleteDialog
+          title="Delete Salary Payment"
+          message="Are you sure you want to delete this salary payment? This action cannot be undone."
+          onConfirm={() => handleDeletePayment(deleteConfirm)}
+          onCancel={() => setDeleteConfirm(null)}
+          isLoading={saving}
+        />
       )}
     </div>
         </div>

@@ -17,10 +17,11 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, TrendingUp, Calendar, Paperclip, X, Trash2, CheckSquare, Square } from 'lucide-react';
+import { Plus, TrendingUp, Calendar, Paperclip, X, Trash2, CheckSquare, Square, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { AttachmentBadge, AttachmentViewer } from '@/components/ui/file-upload';
+import { ApprovalBadge, EntryActions, EntryLogViewer, ConfirmDeleteDialog } from '@/components/ui/entry-actions';
 
 interface IncomeEntry {
   id: string;
@@ -31,6 +32,15 @@ interface IncomeEntry {
   amount: number;
   referenceNo?: string;
   attachmentUrl?: string;
+  approvalStatus?: string;
+}
+
+interface EntryLog {
+  id: string;
+  action: string;
+  performer: string;
+  timestamp: string;
+  details?: string;
 }
 
 interface Category {
@@ -60,11 +70,32 @@ export default function IncomePage({ params }: PageProps) {
   const [uploading, setUploading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [viewAttachment, setViewAttachment] = useState("");
+
+  // Edit dialog state
+  const [editEntry, setEditEntry] = useState<IncomeEntry | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editSelectedFile, setEditSelectedFile] = useState<File | null>(null);
+
+  // Delete confirmation state
+  const [deleteEntry, setDeleteEntry] = useState<string | null>(null);
+
+  // Log viewer state
+  const [logEntry, setLogEntry] = useState<string | null>(null);
+  const [logs, setLogs] = useState<EntryLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
+    amount: '',
+    category: '',
+    particulars: '',
+    paymentMethod: '',
+    referenceNo: '',
+  });
+
+  const [editFormData, setEditFormData] = useState({
+    date: '',
     amount: '',
     category: '',
     particulars: '',
@@ -240,19 +271,174 @@ export default function IncomePage({ params }: PageProps) {
   const handleDeleteSingle = async (id: string) => {
     try {
       setDeleting(true);
-      const res = await fetch(`/api/companies/${companyId}/transactions/delete?id=${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/companies/${companyId}/transactions?id=${id}`, { method: 'DELETE' });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Failed to delete');
       }
       toast.success('Income entry deleted');
-      setDeleteConfirmId(null);
+      setDeleteEntry(null);
       setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
       fetchData();
     } catch (error: any) {
       toast.error(error.message || 'Failed to delete');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleEditOpen = (entry: IncomeEntry) => {
+    setEditEntry(entry);
+    setEditFormData({
+      date: entry.date,
+      amount: entry.amount.toString(),
+      category: entry.category?.id || '',
+      particulars: entry.particulars || '',
+      paymentMethod: entry.paymentMethod || '',
+      referenceNo: entry.referenceNo || '',
+    });
+    setEditSelectedFile(null);
+    setEditDialogOpen(true);
+  };
+
+  const handleEditInputChange = (
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >
+  ) => {
+    const { name, value } = e.target;
+    setEditFormData((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!editFormData.date || !editFormData.amount || !editFormData.category) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    if (!editEntry) return;
+
+    try {
+      setSubmitting(true);
+
+      // Upload file first if selected
+      let attachmentUrl = editEntry.attachmentUrl;
+      if (editSelectedFile) {
+        setUploading(true);
+        const fileFormData = new FormData();
+        fileFormData.append('file', editSelectedFile);
+        const uploadRes = await fetch('/api/upload', {
+          method: 'POST',
+          body: fileFormData,
+        });
+        if (!uploadRes.ok) {
+          throw new Error('Failed to upload file');
+        }
+        const uploadData = await uploadRes.json();
+        attachmentUrl = uploadData.url;
+        setUploading(false);
+      }
+
+      const response = await fetch(
+        `/api/companies/${companyId}/transactions`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: editEntry.id,
+            type: 'income',
+            date: editFormData.date,
+            amount: parseFloat(editFormData.amount),
+            categoryId: editFormData.category,
+            particulars: editFormData.particulars,
+            paymentMethod: editFormData.paymentMethod.toLowerCase(),
+            referenceNo: editFormData.referenceNo,
+            attachmentUrl,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to update income entry');
+      }
+
+      toast.success('Income entry updated successfully');
+      setEditDialogOpen(false);
+      setEditEntry(null);
+      setEditSelectedFile(null);
+      fetchData();
+    } catch (error) {
+      toast.error('Failed to update income entry');
+      console.error(error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApprove = async (id: string) => {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/transactions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'approve' }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to approve');
+      }
+
+      toast.success('Income entry approved');
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to approve');
+    }
+  };
+
+  const handleReject = async (id: string) => {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/transactions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'reject' }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to reject');
+      }
+
+      toast.success('Income entry rejected');
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to reject');
+    }
+  };
+
+  const handleViewLog = async (id: string) => {
+    try {
+      setLogsLoading(true);
+      setLogEntry(id);
+      const res = await fetch(
+        `/api/companies/${companyId}/entry-logs?module=income&entryId=${id}`
+      );
+
+      if (!res.ok) {
+        throw new Error('Failed to fetch logs');
+      }
+
+      const data = await res.json();
+      setLogs(data.logs || []);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to fetch logs');
+      setLogEntry(null);
+    } finally {
+      setLogsLoading(false);
     }
   };
 
@@ -304,7 +490,7 @@ export default function IncomePage({ params }: PageProps) {
                 <DialogHeader>
                   <DialogTitle>Add Income Entry</DialogTitle>
                 </DialogHeader>
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleSubmit} className="space-y-4" key="add-form">
                   <div className="space-y-2">
                     <Label htmlFor="date">
                       Date <span className="text-red-500">*</span>
@@ -452,6 +638,163 @@ export default function IncomePage({ params }: PageProps) {
                 </form>
               </DialogContent>
             </Dialog>
+
+            {/* Edit Dialog */}
+            <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+              <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                  <DialogTitle>Edit Income Entry</DialogTitle>
+                </DialogHeader>
+                {editEntry && (
+                  <form onSubmit={handleEditSubmit} className="space-y-4" key="edit-form">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-date">
+                        Date <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="edit-date"
+                        name="date"
+                        type="date"
+                        value={editFormData.date}
+                        onChange={handleEditInputChange}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-amount">
+                        Amount <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="edit-amount"
+                        name="amount"
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={editFormData.amount}
+                        onChange={handleEditInputChange}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-category">
+                        Category <span className="text-red-500">*</span>
+                      </Label>
+                      <select
+                        id="edit-category"
+                        name="category"
+                        value={editFormData.category}
+                        onChange={handleEditInputChange}
+                        required
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                      >
+                        <option value="">Select a category</option>
+                        {categories.map((cat) => (
+                          <option key={cat.id} value={cat.id}>
+                            {cat.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-particulars">Particulars</Label>
+                      <Textarea
+                        id="edit-particulars"
+                        name="particulars"
+                        placeholder="Enter details about this income"
+                        value={editFormData.particulars}
+                        onChange={handleEditInputChange}
+                        className="w-full"
+                        rows={3}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-paymentMethod">Payment Method</Label>
+                      <select
+                        id="edit-paymentMethod"
+                        name="paymentMethod"
+                        value={editFormData.paymentMethod}
+                        onChange={handleEditInputChange}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                      >
+                        <option value="">Select payment method</option>
+                        {paymentMethods.map((method) => (
+                          <option key={method} value={method}>
+                            {method}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-referenceNo">Reference No</Label>
+                      <Input
+                        id="edit-referenceNo"
+                        name="referenceNo"
+                        placeholder="e.g., INV-001"
+                        value={editFormData.referenceNo}
+                        onChange={handleEditInputChange}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-attachment">Receipt / Invoice</Label>
+                      <div className="flex items-center gap-2">
+                        <label className="flex-1 cursor-pointer">
+                          <div className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 transition-colors">
+                            <Paperclip className="h-4 w-4 text-gray-400" />
+                            <span className="text-sm text-gray-600 truncate">
+                              {editSelectedFile ? editSelectedFile.name : 'Attach PDF or image...'}
+                            </span>
+                          </div>
+                          <input
+                            id="edit-attachment"
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png,.webp"
+                            className="hidden"
+                            onChange={(e) => setEditSelectedFile(e.target.files?.[0] || null)}
+                          />
+                        </label>
+                        {editSelectedFile && (
+                          <button
+                            type="button"
+                            onClick={() => setEditSelectedFile(null)}
+                            className="p-1 text-gray-400 hover:text-red-500"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500">PDF, JPG, PNG, WebP — Max 10MB</p>
+                    </div>
+
+                    <div className="flex gap-3 pt-4">
+                      <Button
+                        type="submit"
+                        disabled={submitting || uploading}
+                        className="flex-1 bg-green-600 hover:bg-green-700"
+                      >
+                        {uploading ? 'Uploading file...' : submitting ? 'Saving...' : 'Save Changes'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setEditDialogOpen(false)}
+                        className="flex-1"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                )}
+              </DialogContent>
+            </Dialog>
           </div>
 
           {/* Income Table */}
@@ -515,6 +858,7 @@ export default function IncomePage({ params }: PageProps) {
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Payment Method</th>
                         <th className="text-right py-3 px-4 font-semibold text-gray-700">Amount</th>
+                        <th className="py-3 px-4 text-left font-semibold text-gray-700">Status</th>
                         <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">File</th>
                         <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">💬</th>
                         <th className="py-3 px-2 w-10"></th>
@@ -551,6 +895,9 @@ export default function IncomePage({ params }: PageProps) {
                           <td className="py-3 px-4 text-right font-semibold text-green-600">
                             {formatCurrency(entry.amount, companyCurrency)}
                           </td>
+                          <td className="py-3 px-4">
+                            <ApprovalBadge status={entry.approvalStatus} />
+                          </td>
                           <td className="py-3 px-2 text-center">
                             {entry.attachmentUrl && (
                               <button onClick={() => setViewAttachment(entry.attachmentUrl!)} title="View attachment">
@@ -566,38 +913,21 @@ export default function IncomePage({ params }: PageProps) {
                             />
                           </td>
                           <td className="py-3 px-2">
-                            {deleteConfirmId === entry.id ? (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleDeleteSingle(entry.id)}
-                                  disabled={deleting}
-                                  className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700"
-                                >
-                                  {deleting ? '...' : 'Yes'}
-                                </button>
-                                <button
-                                  onClick={() => setDeleteConfirmId(null)}
-                                  className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                                >
-                                  No
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setDeleteConfirmId(entry.id)}
-                                className="text-gray-400 hover:text-red-500 transition-colors"
-                                title="Delete entry"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
+                            <EntryActions
+                              entryId={entry.id}
+                              onEdit={() => handleEditOpen(entry)}
+                              onDelete={() => setDeleteEntry(entry.id)}
+                              onApprove={() => handleApprove(entry.id)}
+                              onReject={() => handleReject(entry.id)}
+                              onViewLog={() => handleViewLog(entry.id)}
+                            />
                           </td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       <tr className="bg-green-50 border-t-2 border-green-200">
-                        <td colSpan={6} className="py-3 px-4 font-bold text-gray-900 text-right">
+                        <td colSpan={7} className="py-3 px-4 font-bold text-gray-900 text-right">
                           Total ({income.length} entries)
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-green-700 text-lg">
@@ -618,6 +948,34 @@ export default function IncomePage({ params }: PageProps) {
       {/* Attachment viewer modal */}
       {viewAttachment && (
         <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDeleteDialog
+        open={deleteEntry !== null}
+        title="Delete Income Entry"
+        description="Are you sure you want to delete this income entry? This action cannot be undone."
+        onConfirm={() => deleteEntry && handleDeleteSingle(deleteEntry)}
+        onCancel={() => setDeleteEntry(null)}
+        loading={deleting}
+      />
+
+      {/* Entry Log Viewer Modal */}
+      {logEntry && (
+        <Dialog open={logEntry !== null} onOpenChange={(open) => !open && setLogEntry(null)}>
+          <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-auto">
+            <DialogHeader>
+              <DialogTitle>Entry Activity Log</DialogTitle>
+            </DialogHeader>
+            {logsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+              </div>
+            ) : (
+              <EntryLogViewer logs={logs} />
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

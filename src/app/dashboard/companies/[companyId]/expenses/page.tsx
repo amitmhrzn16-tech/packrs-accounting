@@ -13,6 +13,7 @@ import { Plus, TrendingDown, Calendar, Paperclip, X, Trash2, CheckSquare, Square
 import { toast } from 'sonner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { AttachmentBadge, AttachmentViewer } from '@/components/ui/file-upload';
+import { ApprovalBadge, EntryActions, EntryLogViewer, ConfirmDeleteDialog } from '@/components/ui/entry-actions';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { MainContent } from "@/components/dashboard/main-content";
 import CommentThread from '@/components/CommentThread';
@@ -26,11 +27,21 @@ interface Expense {
   amount: number;
   referenceNo?: string;
   attachmentUrl?: string;
+  approvalStatus?: string;
 }
 
 interface Category {
   id: string;
   name: string;
+}
+
+interface LogEntry {
+  id: string;
+  action: string;
+  fieldChanges: Record<string, { old: any; new: any }> | null;
+  performedByName: string;
+  notes: string;
+  createdAt: string;
 }
 
 export default function ExpensesPage() {
@@ -48,9 +59,15 @@ export default function ExpensesPage() {
   const [uploading, setUploading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [viewAttachment, setViewAttachment] = useState("");
+
+  const [editEntry, setEditEntry] = useState<Expense | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deleteEntry, setDeleteEntry] = useState<Expense | null>(null);
+  const [logEntry, setLogEntry] = useState<Expense | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -139,7 +156,7 @@ export default function ExpensesPage() {
     }
     try {
       setIsSubmitting(true);
-      let attachmentUrl = null;
+      let attachmentUrl = editEntry?.attachmentUrl || null;
       if (selectedFile) {
         setUploading(true);
         const fileFormData = new FormData();
@@ -151,9 +168,10 @@ export default function ExpensesPage() {
         setUploading(false);
       }
       const response = await fetch(`/api/companies/${companyId}/transactions`, {
-        method: 'POST',
+        method: editEntry ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(editEntry && { id: editEntry.id }),
           type: 'expense',
           date: formData.date,
           amount: parseFloat(formData.amount),
@@ -164,15 +182,17 @@ export default function ExpensesPage() {
           attachmentUrl,
         }),
       });
-      if (!response.ok) throw new Error('Failed to add expense');
-      toast.success('Expense added successfully');
+      if (!response.ok) throw new Error(`Failed to ${editEntry ? 'update' : 'add'} expense`);
+      toast.success(`Expense ${editEntry ? 'updated' : 'added'} successfully`);
       setIsDialogOpen(false);
+      setEditDialogOpen(false);
+      setEditEntry(null);
       setSelectedFile(null);
       setFormData({ date: new Date().toISOString().split('T')[0], amount: '', category: '', particulars: '', paymentMethod: 'Cash', referenceNo: '' });
       fetchData();
     } catch (error) {
-      console.error('Error adding expense:', error);
-      toast.error('Failed to add expense');
+      console.error(`Error ${editEntry ? 'updating' : 'adding'} expense:`, error);
+      toast.error(`Failed to ${editEntry ? 'update' : 'add'} expense`);
     } finally {
       setIsSubmitting(false);
     }
@@ -194,19 +214,79 @@ export default function ExpensesPage() {
     }
   };
 
+  const handleOpenEdit = (entry: Expense) => {
+    setEditEntry(entry);
+    setFormData({
+      date: entry.date,
+      amount: entry.amount.toString(),
+      category: entry.category?.id || '',
+      particulars: entry.particulars,
+      paymentMethod: entry.paymentMethod.charAt(0).toUpperCase() + entry.paymentMethod.slice(1),
+      referenceNo: entry.referenceNo || '',
+    });
+    setSelectedFile(null);
+    setEditDialogOpen(true);
+  };
+
   const handleDeleteSingle = async (id: string) => {
     try {
       setDeleting(true);
-      const res = await fetch(`/api/companies/${companyId}/transactions/delete?id=${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/companies/${companyId}/transactions?id=${id}`, { method: 'DELETE' });
       if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Failed to delete'); }
       toast.success('Expense entry deleted');
-      setDeleteConfirmId(null);
+      setDeleteEntry(null);
       setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
       fetchData();
     } catch (error: any) {
       toast.error(error.message || 'Failed to delete');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleApprove = async (id: string) => {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/transactions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'approve' }),
+      });
+      if (!res.ok) throw new Error('Failed to approve');
+      toast.success('Expense approved');
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to approve');
+    }
+  };
+
+  const handleReject = async (id: string) => {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/transactions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'reject' }),
+      });
+      if (!res.ok) throw new Error('Failed to reject');
+      toast.success('Expense rejected');
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to reject');
+    }
+  };
+
+  const handleViewLog = async (entry: Expense) => {
+    try {
+      setLogsLoading(true);
+      setLogEntry(entry);
+      const res = await fetch(`/api/companies/${companyId}/entry-logs?transactionId=${entry.id}&module=expense`);
+      if (!res.ok) throw new Error('Failed to fetch logs');
+      const data = await res.json();
+      setLogs(data.logs || []);
+    } catch (error: any) {
+      toast.error('Failed to load logs');
+      console.error(error);
+    } finally {
+      setLogsLoading(false);
     }
   };
 
@@ -257,18 +337,18 @@ export default function ExpensesPage() {
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="date">Date *</Label>
+                    <Label htmlFor="date">Date <span className="text-red-500">*</span></Label>
                     <div className="relative">
                       <Calendar className="absolute left-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
                       <Input id="date" name="date" type="date" value={formData.date} onChange={handleInputChange} required className="pl-10" />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="amount">Amount *</Label>
+                    <Label htmlFor="amount">Amount <span className="text-red-500">*</span></Label>
                     <Input id="amount" name="amount" type="number" step="0.01" value={formData.amount} onChange={handleInputChange} placeholder="0.00" required />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="category">Category *</Label>
+                    <Label htmlFor="category">Category <span className="text-red-500">*</span></Label>
                     <select id="category" name="category" value={formData.category} onChange={handleInputChange} required className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
                       <option value="">Select a category</option>
                       {categories.map((cat) => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}
@@ -310,19 +390,97 @@ export default function ExpensesPage() {
                     </div>
                     <p className="text-xs text-gray-500">PDF, JPG, PNG, WebP — Max 10MB</p>
                   </div>
-                  <Button type="submit" className="w-full" disabled={isSubmitting || uploading}>
-                    {uploading ? 'Uploading file...' : isSubmitting ? 'Adding...' : 'Add Expense'}
-                  </Button>
+                  <div className="flex gap-3 pt-4">
+                    <Button type="submit" className="flex-1" disabled={isSubmitting || uploading}>
+                      {uploading ? 'Uploading file...' : isSubmitting ? 'Adding...' : 'Add Expense'}
+                    </Button>
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} className="flex-1">
+                      Cancel
+                    </Button>
+                  </div>
                 </form>
               </DialogContent>
             </Dialog>
           </div>
 
+          {/* Edit Dialog */}
+          <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+            <DialogContent className="sm:max-w-[500px]">
+              <DialogHeader>
+                <DialogTitle>Edit Expense</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-date">Date <span className="text-red-500">*</span></Label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
+                    <Input id="edit-date" name="date" type="date" value={formData.date} onChange={handleInputChange} required className="pl-10" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-amount">Amount <span className="text-red-500">*</span></Label>
+                  <Input id="edit-amount" name="amount" type="number" step="0.01" value={formData.amount} onChange={handleInputChange} placeholder="0.00" required />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-category">Category <span className="text-red-500">*</span></Label>
+                  <select id="edit-category" name="category" value={formData.category} onChange={handleInputChange} required className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">Select a category</option>
+                    {categories.map((cat) => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-particulars">Particulars</Label>
+                  <Textarea id="edit-particulars" name="particulars" value={formData.particulars} onChange={handleInputChange} placeholder="Enter expense details..." rows={3} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-paymentMethod">Payment Method</Label>
+                  <select id="edit-paymentMethod" name="paymentMethod" value={formData.paymentMethod} onChange={handleInputChange} className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="Cash">Cash</option>
+                    <option value="Bank">Bank</option>
+                    <option value="eSewa">eSewa</option>
+                    <option value="Khalti">Khalti</option>
+                    <option value="Cheque">Cheque</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-referenceNo">Reference No</Label>
+                  <Input id="edit-referenceNo" name="referenceNo" type="text" value={formData.referenceNo} onChange={handleInputChange} placeholder="e.g., INV-001" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-attachment">Receipt / Invoice</Label>
+                  <div className="flex items-center gap-2">
+                    <label className="flex-1 cursor-pointer">
+                      <div className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 transition-colors">
+                        <Paperclip className="h-4 w-4 text-gray-400" />
+                        <span className="text-sm text-gray-600 truncate">{selectedFile ? selectedFile.name : 'Attach PDF or image...'}</span>
+                      </div>
+                      <input id="edit-attachment" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
+                    </label>
+                    {selectedFile && (
+                      <button type="button" onClick={() => setSelectedFile(null)} className="p-1 text-gray-400 hover:text-red-500">
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500">PDF, JPG, PNG, WebP — Max 10MB</p>
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <Button type="submit" className="flex-1" disabled={isSubmitting || uploading}>
+                    {uploading ? 'Uploading file...' : isSubmitting ? 'Updating...' : 'Update Expense'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setEditDialogOpen(false)} className="flex-1">
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+
           {/* Expenses Table */}
           {loading ? (
             <div className="space-y-3">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="h-12 bg-gray-200 rounded-md animate-pulse" />
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="h-12 bg-gray-200 rounded-lg animate-pulse" />
               ))}
             </div>
           ) : expenses.length === 0 ? (
@@ -364,6 +522,7 @@ export default function ExpensesPage() {
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
                         <th className="text-left py-3 px-4 font-semibold text-gray-700">Payment Method</th>
                         <th className="text-right py-3 px-4 font-semibold text-gray-700">Amount</th>
+                        <th className="text-center py-3 px-4 font-semibold text-gray-700">Status</th>
                         <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">File</th>
                         <th className="py-3 px-2 w-10 text-center font-semibold text-gray-700">💬</th>
                         <th className="py-3 px-2 w-10"></th>
@@ -382,6 +541,9 @@ export default function ExpensesPage() {
                           <td className="py-3 px-4"><Badge variant="outline">{expense.category?.name || '—'}</Badge></td>
                           <td className="py-3 px-4 text-gray-900"><Badge variant="secondary">{expense.paymentMethod}</Badge></td>
                           <td className="py-3 px-4 text-right text-red-600 font-semibold">{formatCurrency(expense.amount, companyCurrency)}</td>
+                          <td className="py-3 px-4 text-center">
+                            {expense.approvalStatus && <ApprovalBadge status={expense.approvalStatus} small />}
+                          </td>
                           <td className="py-3 px-2 text-center">
                             {expense.attachmentUrl && (
                               <button onClick={() => setViewAttachment(expense.attachmentUrl!)} title="View attachment">
@@ -397,18 +559,15 @@ export default function ExpensesPage() {
                             />
                           </td>
                           <td className="py-3 px-2">
-                            {deleteConfirmId === expense.id ? (
-                              <div className="flex items-center gap-1">
-                                <button onClick={() => handleDeleteSingle(expense.id)} disabled={deleting} className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700">
-                                  {deleting ? '...' : 'Yes'}
-                                </button>
-                                <button onClick={() => setDeleteConfirmId(null)} className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">No</button>
-                              </div>
-                            ) : (
-                              <button onClick={() => setDeleteConfirmId(expense.id)} className="text-gray-400 hover:text-red-500 transition-colors" title="Delete entry">
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
+                            <EntryActions
+                              entryId={expense.id}
+                              approvalStatus={expense.approvalStatus || 'pending'}
+                              onEdit={() => handleOpenEdit(expense)}
+                              onDelete={() => setDeleteEntry(expense)}
+                              onApprove={() => handleApprove(expense.id)}
+                              onReject={() => handleReject(expense.id)}
+                              onViewLog={() => handleViewLog(expense)}
+                            />
                           </td>
                         </tr>
                       ))}
@@ -432,6 +591,27 @@ export default function ExpensesPage() {
       {/* Attachment viewer modal */}
       {viewAttachment && (
         <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteEntry && (
+        <ConfirmDeleteDialog
+          title="Delete Expense Entry"
+          message={`Are you sure you want to delete this expense entry? This action cannot be undone.`}
+          onConfirm={() => handleDeleteSingle(deleteEntry.id)}
+          onCancel={() => setDeleteEntry(null)}
+          loading={deleting}
+        />
+      )}
+
+      {/* Entry Log Viewer */}
+      {logEntry && (
+        <EntryLogViewer
+          logs={logs}
+          loading={logsLoading}
+          onClose={() => setLogEntry(null)}
+          title={`Activity Log: ${formatDate(logEntry.date)}`}
+        />
       )}
     </div>
   );

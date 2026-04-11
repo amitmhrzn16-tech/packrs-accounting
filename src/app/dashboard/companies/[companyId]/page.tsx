@@ -76,6 +76,7 @@ export default function CompanyDashboard({
     totalAdvanceDue: number;
     recentSalaries: number;
     dailyCashToday: number;
+    staffList: Array<{ id: string; name: string; role: string; joinDate: string; salaryAmount: number }>;
   } | null>(null);
 
   useEffect(() => {
@@ -118,6 +119,13 @@ export default function CompanyDashboard({
             totalAdvanceDue: Number(advanceData.summary?.total_outstanding) || 0,
             recentSalaries: Number(salaryData.summary?.total_paid) || 0,
             dailyCashToday: Number(cashData.summary?.total_amount) || 0,
+            staffList: staffList.map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              role: s.role,
+              joinDate: s.joinDate || "",
+              salaryAmount: s.salaryAmount || 0,
+            })),
           });
         } catch {}
       } catch (err) {
@@ -340,6 +348,55 @@ export default function CompanyDashboard({
                       Manage Staff →
                     </Link>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Staff & Riders with Joining Date */}
+        {payrollData && payrollData.staffList && payrollData.staffList.length > 0 && (
+          <div className="mb-8">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5 text-indigo-500" />
+                  Staff &amp; Riders
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-2 px-3 font-semibold text-gray-600">Name</th>
+                        <th className="text-left py-2 px-3 font-semibold text-gray-600">Role</th>
+                        <th className="text-left py-2 px-3 font-semibold text-gray-600">Joining Date</th>
+                        <th className="text-right py-2 px-3 font-semibold text-gray-600">Salary</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payrollData.staffList.slice(0, 15).map((s) => (
+                        <tr key={s.id} className="border-b border-gray-50 hover:bg-gray-50">
+                          <td className="py-2 px-3 font-medium text-gray-900">{s.name}</td>
+                          <td className="py-2 px-3">
+                            <Badge variant="outline" className="capitalize text-xs">{s.role.replace("_", " ")}</Badge>
+                          </td>
+                          <td className="py-2 px-3 text-gray-600">
+                            {s.joinDate ? new Date(s.joinDate).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "—"}
+                          </td>
+                          <td className="py-2 px-3 text-right font-medium">{formatCurrency(s.salaryAmount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {payrollData.staffList.length > 15 && (
+                    <div className="text-center pt-3">
+                      <Link href={`/dashboard/companies/${params.companyId}/staff`} className="text-sm text-primary hover:underline">
+                        View all {payrollData.staffList.length} staff →
+                      </Link>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

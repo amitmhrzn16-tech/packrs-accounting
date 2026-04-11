@@ -11,9 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   Plus, AlertTriangle, CheckCircle, Clock, DollarSign, ArrowDownRight,
-  X, ChevronDown, ChevronUp, ShieldAlert, Send
+  X, ChevronDown, ChevronUp, ShieldAlert, Send, MoreVertical, Trash2, Edit2, ThumbsUp, ThumbsDown, Eye
 } from "lucide-react";
 import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
+import { ApprovalBadge, EntryActions, EntryLogViewer, ConfirmDeleteDialog } from "@/components/ui/entry-actions";
 
 interface Staff {
   id: string;
@@ -50,6 +51,9 @@ interface Advance {
   createdAt: string;
   attachmentUrl?: string;
   recoveries: Recovery[];
+  interestRate?: number;
+  customDeductionAmount?: number;
+  approvalStatus?: string;
 }
 
 const PAYMENT_METHODS = [
@@ -90,6 +94,7 @@ export default function AdvancesPage({ params }: PageProps) {
   const [form, setForm] = useState({
     staffId: "", amount: "", paymentDate: "", paymentMethod: "cash",
     referenceNo: "", reason: "", recoveryDeadline: "", notes: "", attachmentUrl: "",
+    interestRate: "0", customDeductionAmount: "",
   });
   const [viewAttachment, setViewAttachment] = useState("");
 
@@ -106,6 +111,24 @@ export default function AdvancesPage({ params }: PageProps) {
   const [recoveryForm, setRecoveryForm] = useState({
     amount: "", recoveryDate: "", recoveryMethod: "cash_return", notes: "",
   });
+
+  // Edit modal
+  const [showEditForm, setShowEditForm] = useState(false);
+  const [editingAdvance, setEditingAdvance] = useState<Advance | null>(null);
+  const [editForm, setEditForm] = useState({
+    amount: "", reason: "", interestRate: "0", customDeductionAmount: "",
+  });
+
+  // Entry log viewer
+  const [showLogViewer, setShowLogViewer] = useState(false);
+  const [logViewerAdvanceId, setLogViewerAdvanceId] = useState("");
+
+  // Delete confirmation
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState("");
+
+  // Action menu dropdown
+  const [openActionMenu, setOpenActionMenu] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
 
@@ -157,11 +180,33 @@ export default function AdvancesPage({ params }: PageProps) {
     setForm({
       staffId: "", amount: "", paymentDate: today, paymentMethod: "cash",
       referenceNo: "", reason: "", recoveryDeadline: "", notes: "", attachmentUrl: "",
+      interestRate: "0", customDeductionAmount: "",
     });
     setShowConfirmation(false);
     setNeedsAdminApproval(false);
     setAdminAlertSent(false);
     setShowForm(true);
+  }
+
+  function openEditForm(advance: Advance) {
+    setEditingAdvance(advance);
+    setEditForm({
+      amount: String(advance.amount),
+      reason: advance.reason || "",
+      interestRate: String(advance.interestRate || 0),
+      customDeductionAmount: String(advance.customDeductionAmount || ""),
+    });
+    setShowEditForm(true);
+  }
+
+  function openDeleteConfirm(advanceId: string) {
+    setDeleteTargetId(advanceId);
+    setShowDeleteConfirm(true);
+  }
+
+  function openLogViewer(advanceId: string) {
+    setLogViewerAdvanceId(advanceId);
+    setShowLogViewer(true);
   }
 
   function openRecoveryForm(advance: Advance) {
@@ -250,6 +295,8 @@ export default function AdvancesPage({ params }: PageProps) {
           recoveryDeadline: form.recoveryDeadline,
           notes: form.notes,
           attachmentUrl: form.attachmentUrl || undefined,
+          interestRate: parseFloat(form.interestRate) || 0,
+          customDeductionAmount: form.customDeductionAmount ? parseFloat(form.customDeductionAmount) : undefined,
         }),
       });
       if (res.ok) {
@@ -265,6 +312,113 @@ export default function AdvancesPage({ params }: PageProps) {
     } catch (err) {
       console.error("handleCreateAdvance error:", err);
       alert("Failed to create advance. Check console for details.");
+    }
+    setSaving(false);
+  }
+
+  async function handleEditAdvance() {
+    if (!editingAdvance) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/advance-payments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingAdvance.id,
+          action: "edit",
+          amount: parseFloat(editForm.amount) || editingAdvance.amount,
+          reason: editForm.reason,
+          interestRate: parseFloat(editForm.interestRate) || 0,
+          customDeductionAmount: editForm.customDeductionAmount ? parseFloat(editForm.customDeductionAmount) : undefined,
+        }),
+      });
+      if (res.ok) {
+        setShowEditForm(false);
+        setEditingAdvance(null);
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchAdvances();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to update advance: ${err.error || res.statusText}`);
+      }
+    } catch (err) {
+      console.error("handleEditAdvance error:", err);
+      alert("Failed to update advance. Check console for details.");
+    }
+    setSaving(false);
+  }
+
+  async function handleDeleteAdvance(advanceId: string) {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/companies/${companyId}/advance-payments?id=${advanceId}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        setShowDeleteConfirm(false);
+        setDeleteTargetId("");
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchAdvances();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to delete advance: ${err.error || res.statusText}`);
+      }
+    } catch (err) {
+      console.error("handleDeleteAdvance error:", err);
+      alert("Failed to delete advance. Check console for details.");
+    }
+    setSaving(false);
+  }
+
+  async function handleApproveAdvance(advanceId: string) {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/advance-payments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: advanceId,
+          action: "approve",
+        }),
+      });
+      if (res.ok) {
+        setOpenActionMenu(null);
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchAdvances();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to approve advance: ${err.error || res.statusText}`);
+      }
+    } catch (err) {
+      console.error("handleApproveAdvance error:", err);
+      alert("Failed to approve advance. Check console for details.");
+    }
+    setSaving(false);
+  }
+
+  async function handleRejectAdvance(advanceId: string) {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/advance-payments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: advanceId,
+          action: "reject",
+        }),
+      });
+      if (res.ok) {
+        setOpenActionMenu(null);
+        await new Promise((r) => setTimeout(r, 300));
+        await fetchAdvances();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to reject advance: ${err.error || res.statusText}`);
+      }
+    } catch (err) {
+      console.error("handleRejectAdvance error:", err);
+      alert("Failed to reject advance. Check console for details.");
     }
     setSaving(false);
   }
@@ -448,82 +602,160 @@ export default function AdvancesPage({ params }: PageProps) {
           ) : advances.length === 0 ? (
             <p className="py-8 text-center text-muted-foreground">No advance payments found.</p>
           ) : (
-            <div className="divide-y">
-              {advances.map((a) => (
-                <div key={a.id} className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold">{a.staffName}</span>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 border-b">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-semibold">Staff</th>
+                    <th className="text-left px-4 py-3 font-semibold">Amount</th>
+                    <th className="text-left px-4 py-3 font-semibold">Interest Rate</th>
+                    <th className="text-left px-4 py-3 font-semibold">Total with Interest</th>
+                    <th className="text-left px-4 py-3 font-semibold">Status</th>
+                    <th className="text-left px-4 py-3 font-semibold">Approval</th>
+                    <th className="text-left px-4 py-3 font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {advances.map((a) => {
+                    const totalWithInterest = a.amount * (1 + (a.interestRate || 0) / 100);
+                    return (
+                      <tr key={a.id} className="hover:bg-muted/20">
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="font-medium">{a.staffName}</p>
+                            <p className="text-xs text-muted-foreground">{a.staffRole}</p>
+                            <p className="text-xs text-muted-foreground">{formatDate(a.paymentDate)}</p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="font-semibold">{formatCurrency(a.amount, companyCurrency)}</p>
+                            <p className="text-xs text-muted-foreground">Due: {formatCurrency(a.dueAmount, companyCurrency)}</p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {a.interestRate && a.interestRate > 0 ? (
+                            <span className="text-orange-600 font-medium">{a.interestRate}%</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {a.interestRate && a.interestRate > 0 ? (
+                            <span className="font-semibold text-orange-600">{formatCurrency(totalWithInterest, companyCurrency)}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
                           {getStatusBadge(a.status)}
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {a.staffRole} · Given: {formatDate(a.paymentDate)} · Via {a.paymentMethod}
-                        </p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <ApprovalBadge status={a.approvalStatus} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="relative inline-block">
+                            <button
+                              onClick={() => setOpenActionMenu(openActionMenu === a.id ? null : a.id)}
+                              className="rounded p-2 hover:bg-accent"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
+                            {openActionMenu === a.id && (
+                              <div className="absolute right-0 mt-1 bg-background border rounded-lg shadow-lg z-40 min-w-48">
+                                <button
+                                  onClick={() => { openEditForm(a); setOpenActionMenu(null); }}
+                                  className="flex items-center gap-2 w-full px-4 py-2 hover:bg-muted text-left text-sm border-b"
+                                >
+                                  <Edit2 className="h-4 w-4" /> Edit
+                                </button>
+                                <button
+                                  onClick={() => { handleApproveAdvance(a.id); }}
+                                  className="flex items-center gap-2 w-full px-4 py-2 hover:bg-muted text-left text-sm border-b text-green-600"
+                                >
+                                  <ThumbsUp className="h-4 w-4" /> Approve
+                                </button>
+                                <button
+                                  onClick={() => { handleRejectAdvance(a.id); }}
+                                  className="flex items-center gap-2 w-full px-4 py-2 hover:bg-muted text-left text-sm border-b text-red-600"
+                                >
+                                  <ThumbsDown className="h-4 w-4" /> Reject
+                                </button>
+                                <button
+                                  onClick={() => { openLogViewer(a.id); setOpenActionMenu(null); }}
+                                  className="flex items-center gap-2 w-full px-4 py-2 hover:bg-muted text-left text-sm border-b"
+                                >
+                                  <Eye className="h-4 w-4" /> View Log
+                                </button>
+                                <button
+                                  onClick={() => { openDeleteConfirm(a.id); setOpenActionMenu(null); }}
+                                  className="flex items-center gap-2 w-full px-4 py-2 hover:bg-muted text-left text-sm text-red-600"
+                                >
+                                  <Trash2 className="h-4 w-4" /> Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Expanded Details (Recovery History) */}
+            {expandedId && (
+              <div className="border-t">
+                {advances
+                  .filter((a) => a.id === expandedId)
+                  .map((a) => (
+                    <div key={a.id} className="p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        {a.reason && <span className="text-sm text-muted-foreground">Reason: {a.reason}</span>}
+                        {a.attachmentUrl && (
+                          <button onClick={() => setViewAttachment(a.attachmentUrl!)}>
+                            <AttachmentBadge url={a.attachmentUrl} small />
+                          </button>
+                        )}
                       </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Given / Due</p>
-                        <p className="font-semibold">
-                          {formatCurrency(a.amount, companyCurrency)} / <span className="text-red-600">{formatCurrency(a.dueAmount, companyCurrency)}</span>
-                        </p>
-                      </div>
+                      {a.recoveryDeadline && (
+                        <p className="text-xs text-orange-500 mb-3">Deadline: {formatDate(a.recoveryDeadline)}</p>
+                      )}
                       {a.status !== "recovered" && (
-                        <Button size="sm" variant="outline" onClick={() => openRecoveryForm(a)}>
+                        <Button size="sm" variant="outline" onClick={() => openRecoveryForm(a)} className="mb-3">
                           Recover
                         </Button>
                       )}
-                      <button
-                        onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
-                        className="rounded p-1 hover:bg-accent"
-                      >
-                        {expandedId === a.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-1 flex items-center gap-2">
-                    {a.reason && <span className="text-sm text-muted-foreground">Reason: {a.reason}</span>}
-                    {a.attachmentUrl && (
-                      <button onClick={() => setViewAttachment(a.attachmentUrl!)}>
-                        <AttachmentBadge url={a.attachmentUrl} small />
-                      </button>
-                    )}
-                  </div>
-                  {a.recoveryDeadline && (
-                    <p className="text-xs text-orange-500">Deadline: {formatDate(a.recoveryDeadline)}</p>
-                  )}
-
-                  {expandedId === a.id && a.recoveries.length > 0 && (
-                    <div className="mt-3 rounded-lg border bg-muted/30 p-3">
-                      <p className="text-xs font-semibold mb-2">Recovery History</p>
-                      <div className="space-y-2">
-                        {a.recoveries.map((r) => (
-                          <div key={r.id} className="flex items-center justify-between text-sm">
-                            <div>
-                              <span className="text-green-600 font-medium">
-                                +{formatCurrency(r.amount, companyCurrency)}
-                              </span>
-                              <span className="ml-2 text-muted-foreground">
-                                via {r.recoveryMethod.replace("_", " ")}
-                              </span>
-                            </div>
-                            <span className="text-xs text-muted-foreground">{formatDate(r.recoveryDate)}</span>
+                      {a.recoveries.length > 0 && (
+                        <div className="rounded-lg border bg-muted/30 p-3">
+                          <p className="text-xs font-semibold mb-2">Recovery History</p>
+                          <div className="space-y-2">
+                            {a.recoveries.map((r) => (
+                              <div key={r.id} className="flex items-center justify-between text-sm">
+                                <div>
+                                  <span className="text-green-600 font-medium">
+                                    +{formatCurrency(r.amount, companyCurrency)}
+                                  </span>
+                                  <span className="ml-2 text-muted-foreground">
+                                    via {r.recoveryMethod.replace("_", " ")}
+                                  </span>
+                                </div>
+                                <span className="text-xs text-muted-foreground">{formatDate(r.recoveryDate)}</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      )}
+                      {a.recoveries.length === 0 && (
+                        <div className="rounded-lg border bg-muted/30 p-3">
+                          <p className="text-xs text-muted-foreground">No recoveries recorded yet.</p>
+                        </div>
+                      )}
                     </div>
-                  )}
-                  {expandedId === a.id && a.recoveries.length === 0 && (
-                    <div className="mt-3 rounded-lg border bg-muted/30 p-3">
-                      <p className="text-xs text-muted-foreground">No recoveries recorded yet.</p>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                  ))}
+              </div>
+            )}
           )}
         </CardContent>
       </Card>
@@ -628,6 +860,17 @@ export default function AdvancesPage({ params }: PageProps) {
                 onClear={() => setForm({ ...form, attachmentUrl: "" })}
               />
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Interest Rate (%)</Label>
+                  <Input type="number" step="0.01" min="0" value={form.interestRate} onChange={(e) => setForm({ ...form, interestRate: e.target.value })} placeholder="0" />
+                </div>
+                <div>
+                  <Label>Monthly Deduction Amount</Label>
+                  <Input type="number" step="0.01" min="0" value={form.customDeductionAmount} onChange={(e) => setForm({ ...form, customDeductionAmount: e.target.value })} placeholder="Optional" />
+                </div>
+              </div>
+
               <div>
                 <Label>Notes</Label>
                 <textarea
@@ -697,6 +940,32 @@ export default function AdvancesPage({ params }: PageProps) {
                 <span className="text-muted-foreground">Advance Amount:</span>
                 <span className="font-bold text-lg">{formatCurrency(parseFloat(form.amount) || 0, companyCurrency)}</span>
               </div>
+              {parseFloat(form.interestRate) > 0 && (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Interest Rate:</span>
+                    <span className="font-medium">{parseFloat(form.interestRate)}%</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Interest Amount:</span>
+                    <span className="font-medium text-orange-600">
+                      {formatCurrency((parseFloat(form.amount) || 0) * (parseFloat(form.interestRate) || 0) / 100, companyCurrency)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm border-t pt-2">
+                    <span className="text-muted-foreground font-semibold">Total with Interest:</span>
+                    <span className="font-bold text-lg text-orange-600">
+                      {formatCurrency((parseFloat(form.amount) || 0) * (1 + (parseFloat(form.interestRate) || 0) / 100), companyCurrency)}
+                    </span>
+                  </div>
+                </>
+              )}
+              {form.customDeductionAmount && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Monthly Deduction:</span>
+                  <span className="font-medium">{formatCurrency(parseFloat(form.customDeductionAmount), companyCurrency)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Payment Date:</span>
                 <span>{form.paymentDate}</span>
@@ -815,6 +1084,76 @@ export default function AdvancesPage({ params }: PageProps) {
           </div>
         </div>
       )}
+      {/* Edit Advance Modal */}
+      {showEditForm && editingAdvance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold">Edit Advance</h2>
+              <button onClick={() => setShowEditForm(false)} className="rounded p-1 hover:bg-accent">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <Label>Staff</Label>
+                <p className="text-sm font-medium">{editingAdvance.staffName}</p>
+              </div>
+
+              <div>
+                <Label>Amount</Label>
+                <Input type="number" value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} />
+              </div>
+
+              <div>
+                <Label>Reason</Label>
+                <Input value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} placeholder="e.g. Medical emergency..." />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Interest Rate (%)</Label>
+                  <Input type="number" step="0.01" min="0" value={editForm.interestRate} onChange={(e) => setEditForm({ ...editForm, interestRate: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Monthly Deduction</Label>
+                  <Input type="number" step="0.01" min="0" value={editForm.customDeductionAmount} onChange={(e) => setEditForm({ ...editForm, customDeductionAmount: e.target.value })} placeholder="Optional" />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <Button variant="outline" onClick={() => setShowEditForm(false)}>Cancel</Button>
+                <Button onClick={handleEditAdvance} disabled={saving}>
+                  {saving ? "Saving..." : "Save Changes"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <ConfirmDeleteDialog
+          title="Delete Advance"
+          message={`Are you sure you want to delete this advance? This action cannot be undone.`}
+          onConfirm={() => handleDeleteAdvance(deleteTargetId)}
+          onCancel={() => setShowDeleteConfirm(false)}
+          isLoading={saving}
+        />
+      )}
+
+      {/* Entry Log Viewer */}
+      {showLogViewer && logViewerAdvanceId && (
+        <EntryLogViewer
+          companyId={companyId}
+          module="advance"
+          entryId={logViewerAdvanceId}
+          onClose={() => { setShowLogViewer(false); setLogViewerAdvanceId(""); }}
+        />
+      )}
+
       {/* Attachment Viewer */}
       {viewAttachment && (
         <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />

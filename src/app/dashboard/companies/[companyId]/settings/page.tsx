@@ -27,6 +27,9 @@ import {
   TrendingDown,
   Banknote,
   Coins,
+  Shield,
+  Check,
+  X as XIcon,
 } from "lucide-react";
 
 interface Category {
@@ -79,12 +82,29 @@ export default function CompanySettings({
   const [newFieldDefault, setNewFieldDefault] = useState("");
   const [addingField, setAddingField] = useState(false);
 
+  // Permissions state
+  interface PermUser { id: string; name: string; email: string; companyRole: string; systemRole: string; }
+  interface ModulePerm { canView: boolean; canAdd: boolean; canEdit: boolean; canDelete: boolean; canComment: boolean; canApprove: boolean; }
+  const [permUsers, setPermUsers] = useState<PermUser[]>([]);
+  const [permData, setPermData] = useState<Record<string, Record<string, ModulePerm>>>({});
+  const [permModules, setPermModules] = useState<string[]>([]);
+  const [selectedPermUser, setSelectedPermUser] = useState<string>("");
+  const [savingPerms, setSavingPerms] = useState(false);
+  const [permLoading, setPermLoading] = useState(false);
+
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"general" | "categories" | "payment" | "payroll">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "categories" | "payment" | "payroll" | "permissions">("general");
 
   useEffect(() => {
     fetchAll();
   }, [companyId]);
+
+  // Load permissions when tab is activated
+  useEffect(() => {
+    if (activeTab === "permissions" && permUsers.length === 0) {
+      fetchPermissions();
+    }
+  }, [activeTab]);
 
   async function fetchAll() {
     setLoading(true);
@@ -285,6 +305,81 @@ export default function CompanySettings({
     }
   }
 
+  async function fetchPermissions() {
+    setPermLoading(true);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/permissions`);
+      if (res.ok) {
+        const data = await res.json();
+        setPermUsers(data.users || []);
+        setPermData(data.permissions || {});
+        setPermModules(data.modules || []);
+        if (data.users?.length > 0 && !selectedPermUser) {
+          setSelectedPermUser(data.users[0].id);
+        }
+      }
+    } catch {
+      toast.error("Failed to load permissions");
+    } finally {
+      setPermLoading(false);
+    }
+  }
+
+  async function saveUserPermissions() {
+    if (!selectedPermUser) return;
+    setSavingPerms(true);
+    try {
+      const userPerms = permData[selectedPermUser] || {};
+      // Build full permissions object with defaults for missing modules
+      const fullPerms: Record<string, ModulePerm> = {};
+      for (const mod of permModules) {
+        fullPerms[mod] = userPerms[mod] || { canView: true, canAdd: false, canEdit: false, canDelete: false, canComment: false, canApprove: false };
+      }
+      const res = await fetch(`/api/companies/${companyId}/permissions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: selectedPermUser, permissions: fullPerms }),
+      });
+      if (!res.ok) throw new Error();
+      toast.success("Permissions saved");
+      fetchPermissions();
+    } catch {
+      toast.error("Failed to save permissions");
+    } finally {
+      setSavingPerms(false);
+    }
+  }
+
+  async function applyPreset(preset: string) {
+    if (!selectedPermUser) return;
+    setSavingPerms(true);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/permissions`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: selectedPermUser, preset }),
+      });
+      if (!res.ok) throw new Error();
+      toast.success(`Applied "${preset}" preset`);
+      fetchPermissions();
+    } catch {
+      toast.error("Failed to apply preset");
+    } finally {
+      setSavingPerms(false);
+    }
+  }
+
+  function togglePerm(userId: string, module: string, field: keyof ModulePerm) {
+    setPermData((prev) => {
+      const copy = { ...prev };
+      if (!copy[userId]) copy[userId] = {};
+      if (!copy[userId][module]) copy[userId][module] = { canView: true, canAdd: false, canEdit: false, canDelete: false, canComment: false, canApprove: false };
+      copy[userId] = { ...copy[userId] };
+      copy[userId][module] = { ...copy[userId][module], [field]: !copy[userId][module][field] };
+      return copy;
+    });
+  }
+
   function addPaymentMethod() {
     if (!newPaymentMethod.trim()) return;
     if (paymentMethods.includes(newPaymentMethod.trim())) {
@@ -336,6 +431,7 @@ export default function CompanySettings({
               { key: "categories" as const, label: "Categories", icon: Tags },
               { key: "payment" as const, label: "Payment Methods", icon: CreditCard },
               { key: "payroll" as const, label: "Payroll & Cash", icon: Banknote },
+              { key: "permissions" as const, label: "Permissions", icon: Shield },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -855,6 +951,118 @@ export default function CompanySettings({
                   >
                     {savingPaymentBalances ? "Saving..." : "Save Opening Balances"}
                   </Button>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+          {/* ═══════════ PERMISSIONS TAB ═══════════ */}
+          {activeTab === "permissions" && (
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="h-5 w-5 text-indigo-500" />
+                    Module Permissions
+                  </CardTitle>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Configure view, add, edit, delete, comment, and approve permissions per user per module.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {permLoading ? (
+                    <div className="h-40 bg-gray-100 rounded animate-pulse" />
+                  ) : permUsers.length === 0 ? (
+                    <div className="text-center py-8">
+                      <p className="text-gray-500">No users found. Loading permissions...</p>
+                      <Button onClick={fetchPermissions} className="mt-3" size="sm" variant="outline">Load Permissions</Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* User selector */}
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex-1 min-w-[200px]">
+                          <Label>Select User</Label>
+                          <select
+                            value={selectedPermUser}
+                            onChange={(e) => setSelectedPermUser(e.target.value)}
+                            className="w-full px-3 py-2 border rounded-md bg-white text-sm"
+                          >
+                            {permUsers.map((u) => (
+                              <option key={u.id} value={u.id}>
+                                {u.name} ({u.email}) — {u.companyRole}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex gap-2 pt-5">
+                          <Button size="sm" variant="outline" onClick={() => applyPreset("super_admin")} disabled={savingPerms}>
+                            SuperAdmin
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => applyPreset("admin")} disabled={savingPerms}>
+                            Admin
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => applyPreset("accountant")} disabled={savingPerms}>
+                            Accountant
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => applyPreset("viewer")} disabled={savingPerms}>
+                            Viewer
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Permissions matrix */}
+                      {selectedPermUser && (
+                        <div className="overflow-x-auto border rounded-lg">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left py-3 px-4 font-semibold text-gray-700">Module</th>
+                                <th className="text-center py-3 px-3 font-semibold text-gray-700">View</th>
+                                <th className="text-center py-3 px-3 font-semibold text-gray-700">Add</th>
+                                <th className="text-center py-3 px-3 font-semibold text-gray-700">Edit</th>
+                                <th className="text-center py-3 px-3 font-semibold text-gray-700">Delete</th>
+                                <th className="text-center py-3 px-3 font-semibold text-gray-700">Comment</th>
+                                <th className="text-center py-3 px-3 font-semibold text-gray-700">Approve</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {permModules.map((mod) => {
+                                const userPerms = permData[selectedPermUser]?.[mod] || {
+                                  canView: true, canAdd: false, canEdit: false, canDelete: false, canComment: false, canApprove: false,
+                                };
+                                const fields: (keyof ModulePerm)[] = ["canView", "canAdd", "canEdit", "canDelete", "canComment", "canApprove"];
+                                return (
+                                  <tr key={mod} className="border-b hover:bg-gray-50">
+                                    <td className="py-2.5 px-4 font-medium capitalize text-gray-800">
+                                      {mod.replace(/_/g, " ")}
+                                    </td>
+                                    {fields.map((field) => (
+                                      <td key={field} className="py-2.5 px-3 text-center">
+                                        <button
+                                          onClick={() => togglePerm(selectedPermUser, mod, field)}
+                                          className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+                                            userPerms[field]
+                                              ? "bg-green-100 text-green-700 hover:bg-green-200"
+                                              : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                                          }`}
+                                        >
+                                          {userPerms[field] ? <Check className="h-4 w-4" /> : <XIcon className="h-3.5 w-3.5" />}
+                                        </button>
+                                      </td>
+                                    ))}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      <Button onClick={saveUserPermissions} disabled={savingPerms || !selectedPermUser}>
+                        {savingPerms ? "Saving..." : "Save Permissions"}
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

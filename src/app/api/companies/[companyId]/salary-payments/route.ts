@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { notifySlack } from "@/lib/slack";
 import { formatCurrency } from "@/lib/utils";
+import { createEntryLog } from "@/lib/entry-log";
 
 function cuid() {
   return "sp" + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -96,6 +97,9 @@ export async function GET(
         createdByName: p.created_by_name || "System",
         createdBy: p.created_by,
         createdAt: p.created_at,
+        approvalStatus: p.approval_status || "pending",
+        approvedBy: p.approved_by || null,
+        approvedAt: p.approved_at || null,
       })),
       summary: safeSummary,
     });
@@ -126,6 +130,8 @@ export async function POST(
       referenceNo, deductions, bonus, notes, autoDeductAdvance,
       customDeductions, // { fieldName: amount } from settings
       attachmentUrl,
+      advanceDeductionOverride, // optional override for max advance deduction %
+      advanceInterestRate, // flag to calculate interest when recovering advances
     } = body;
 
     if (!staffId || !amount || !month || !paymentDate) {
@@ -156,11 +162,14 @@ export async function POST(
     let advanceDeduction = 0;
     if (autoDeductAdvance) {
       const pendingAdvances: any[] = await prisma.$queryRawUnsafe(
-        `SELECT id, due_amount FROM advance_payments WHERE staff_id = ? AND status != 'recovered' AND due_amount > 0 ORDER BY payment_date ASC`,
+        `SELECT id, due_amount, interest_rate FROM advance_payments WHERE staff_id = ? AND status != 'recovered' AND due_amount > 0 ORDER BY payment_date ASC`,
         staffId
       );
 
-      let remaining = grossAmount * 0.25; // max 25% of gross for advance recovery
+      // Determine max deduction: override if provided, otherwise default 25%
+      const maxDeductionPercent = advanceDeductionOverride !== undefined ? advanceDeductionOverride : 25;
+      let remaining = (grossAmount * maxDeductionPercent) / 100;
+
       for (const adv of pendingAdvances) {
         if (remaining <= 0) break;
         const advDue = Number(adv.due_amount);
@@ -170,9 +179,22 @@ export async function POST(
 
         const recId = "ar" + Math.random().toString(36).slice(2) + Date.now().toString(36);
         const now2 = new Date().toISOString();
+
+        // Calculate interest if advanceInterestRate is set and advance has interest_rate
+        let interestPortion = 0;
+        let principalPortion = recoveryAmount;
+
+        if (advanceInterestRate && adv.interest_rate) {
+          const rate = Number(adv.interest_rate);
+          if (rate > 0) {
+            interestPortion = recoveryAmount * (rate / (100 + rate));
+            principalPortion = recoveryAmount - interestPortion;
+          }
+        }
+
         await prisma.$executeRawUnsafe(
-          `INSERT INTO advance_recoveries (id, advance_id, amount, recovery_date, recovery_method, notes, created_by, created_at)
-           VALUES ('${recId}', '${adv.id}', ${recoveryAmount}, '${paymentDate}', 'salary_deduction', 'Auto-deducted from ${month} salary', '${session.user.id}', '${now2}')`
+          `INSERT INTO advance_recoveries (id, advance_id, amount, interest_portion, principal_portion, recovery_date, recovery_method, notes, created_by, created_at)
+           VALUES ('${recId}', '${adv.id}', ${recoveryAmount}, ${interestPortion}, ${principalPortion}, '${paymentDate}', 'salary_deduction', 'Auto-deducted from ${month} salary', '${session.user.id}', '${now2}')`
         );
         await prisma.$executeRawUnsafe(
           `UPDATE advance_payments SET due_amount = ${newDue}, status = '${newStatus}', updated_at = '${now2}' WHERE id = '${adv.id}'`
@@ -196,14 +218,24 @@ export async function POST(
       advanceDeduction > 0 ? `Advance recovery: ${advanceDeduction}` : "",
     ].filter(Boolean).join(" | ");
 
-    // Insert salary payment
+    // Insert salary payment with approval_status = 'pending'
     const attachment = (attachmentUrl || "").replace(/'/g, "''");
     await prisma.$executeRawUnsafe(
       `INSERT INTO salary_payments
-        (id, company_id, staff_id, amount, month, payment_date, payment_method, reference_no, deductions, bonus, net_amount, status, notes, attachment_url, created_by, created_at, updated_at)
+        (id, company_id, staff_id, amount, month, payment_date, payment_method, reference_no, deductions, bonus, net_amount, status, approval_status, notes, attachment_url, created_by, created_at, updated_at)
        VALUES
-        ('${id}', '${params.companyId}', '${staffId}', ${grossAmount}, '${month}', '${paymentDate}', '${method}', '${refNo}', ${totalDeductions}, ${bonusAmt}, ${netAmount}, 'paid', '${allNotes.replace(/'/g, "''")}', ${attachment ? `'${attachment}'` : "NULL"}, '${session.user.id}', '${now}', '${now}')`
+        ('${id}', '${params.companyId}', '${staffId}', ${grossAmount}, '${month}', '${paymentDate}', '${method}', '${refNo}', ${totalDeductions}, ${bonusAmt}, ${netAmount}, 'paid', 'pending', '${allNotes.replace(/'/g, "''")}', ${attachment ? `'${attachment}'` : "NULL"}, '${session.user.id}', '${now}', '${now}')`
     );
+
+    // Create entry log
+    await createEntryLog({
+      companyId: params.companyId,
+      module: 'salary',
+      entryId: id,
+      action: 'created',
+      performedBy: session.user.id,
+      performedByName: session.user.name || '',
+    });
 
     // Also create a corresponding expense transaction
     const txnId = "t" + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -242,6 +274,225 @@ export async function POST(
     }, { status: 201 });
   } catch (error) {
     console.error("POST /salary-payments error:", error);
+    return NextResponse.json({
+      error: "Internal server error",
+      detail: error instanceof Error ? error.message : String(error),
+    }, { status: 500 });
+  }
+}
+
+// PUT — edit, approve, or reject salary payment
+export async function PUT(
+  request: Request,
+  { params }: { params: { companyId: string } }
+) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const access = await verifyAccess(session.user.id, params.companyId);
+    if (!access) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const body = await request.json();
+    const { id, action, ...updateFields } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: "id is required" }, { status: 400 });
+    }
+
+    const now = new Date().toISOString();
+
+    if (action === 'edit') {
+      // Update salary payment fields
+      const updates: string[] = [];
+      const values: any[] = [];
+
+      if (updateFields.amount !== undefined) {
+        updates.push("amount = ?");
+        values.push(Number(updateFields.amount));
+      }
+      if (updateFields.month !== undefined) {
+        updates.push("month = ?");
+        values.push(updateFields.month);
+      }
+      if (updateFields.paymentDate !== undefined) {
+        updates.push("payment_date = ?");
+        values.push(updateFields.paymentDate);
+      }
+      if (updateFields.paymentMethod !== undefined) {
+        updates.push("payment_method = ?");
+        values.push(updateFields.paymentMethod);
+      }
+      if (updateFields.referenceNo !== undefined) {
+        updates.push("reference_no = ?");
+        values.push(updateFields.referenceNo);
+      }
+      if (updateFields.deductions !== undefined) {
+        updates.push("deductions = ?");
+        values.push(Number(updateFields.deductions));
+      }
+      if (updateFields.bonus !== undefined) {
+        updates.push("bonus = ?");
+        values.push(Number(updateFields.bonus));
+      }
+      if (updateFields.netAmount !== undefined) {
+        updates.push("net_amount = ?");
+        values.push(Number(updateFields.netAmount));
+      }
+      if (updateFields.notes !== undefined) {
+        updates.push("notes = ?");
+        values.push(updateFields.notes);
+      }
+      if (updateFields.status !== undefined) {
+        updates.push("status = ?");
+        values.push(updateFields.status);
+      }
+
+      if (updates.length === 0) {
+        return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+      }
+
+      updates.push("updated_at = ?");
+      values.push(now);
+      values.push(id);
+
+      await prisma.$executeRawUnsafe(
+        `UPDATE salary_payments SET ${updates.join(", ")} WHERE id = ?`,
+        ...values
+      );
+
+      // Create entry log for edit
+      await createEntryLog({
+        companyId: params.companyId,
+        module: 'salary',
+        entryId: id,
+        action: 'edited',
+        performedBy: session.user.id,
+        performedByName: session.user.name || '',
+      });
+
+      return NextResponse.json({ success: true, id });
+    } else if (action === 'approve') {
+      // Approve salary payment
+      await prisma.$executeRawUnsafe(
+        `UPDATE salary_payments SET approval_status = 'approved', approved_by = ?, approved_at = ?, updated_at = ? WHERE id = ?`,
+        session.user.id,
+        now,
+        now,
+        id
+      );
+
+      // Create entry log for approval
+      await createEntryLog({
+        companyId: params.companyId,
+        module: 'salary',
+        entryId: id,
+        action: 'approved',
+        performedBy: session.user.id,
+        performedByName: session.user.name || '',
+      });
+
+      return NextResponse.json({ success: true, id, approvalStatus: 'approved' });
+    } else if (action === 'reject') {
+      // Reject salary payment
+      await prisma.$executeRawUnsafe(
+        `UPDATE salary_payments SET approval_status = 'rejected', updated_at = ? WHERE id = ?`,
+        now,
+        id
+      );
+
+      // Create entry log for rejection
+      await createEntryLog({
+        companyId: params.companyId,
+        module: 'salary',
+        entryId: id,
+        action: 'rejected',
+        performedBy: session.user.id,
+        performedByName: session.user.name || '',
+      });
+
+      return NextResponse.json({ success: true, id, approvalStatus: 'rejected' });
+    } else {
+      return NextResponse.json({ error: "action must be 'edit', 'approve', or 'reject'" }, { status: 400 });
+    }
+  } catch (error) {
+    console.error("PUT /salary-payments error:", error);
+    return NextResponse.json({
+      error: "Internal server error",
+      detail: error instanceof Error ? error.message : String(error),
+    }, { status: 500 });
+  }
+}
+
+// DELETE — delete salary payment
+export async function DELETE(
+  request: Request,
+  { params }: { params: { companyId: string } }
+) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const access = await verifyAccess(session.user.id, params.companyId);
+    if (!access) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const url = new URL(request.url);
+    const id = url.searchParams.get("id");
+
+    if (!id) {
+      return NextResponse.json({ error: "id query parameter is required" }, { status: 400 });
+    }
+
+    const now = new Date().toISOString();
+
+    // Get the salary payment to find associated transaction
+    const payment: any[] = await prisma.$queryRawUnsafe(
+      `SELECT id FROM salary_payments WHERE id = ? AND company_id = ?`,
+      id,
+      params.companyId
+    );
+
+    if (payment.length === 0) {
+      return NextResponse.json({ error: "Salary payment not found" }, { status: 404 });
+    }
+
+    // Delete linked transaction if it exists
+    try {
+      await prisma.$executeRawUnsafe(
+        `DELETE FROM transactions WHERE source = 'web' AND particulars LIKE '%Salary:%' AND created_by = ? AND DATE(date) = (SELECT DATE(payment_date) FROM salary_payments WHERE id = ?) LIMIT 1`,
+        session.user.id,
+        id
+      );
+    } catch (txnErr) {
+      console.error("Failed to delete linked transaction:", txnErr);
+    }
+
+    // Delete the salary payment
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM salary_payments WHERE id = ? AND company_id = ?`,
+      id,
+      params.companyId
+    );
+
+    // Create entry log for deletion
+    await createEntryLog({
+      companyId: params.companyId,
+      module: 'salary',
+      entryId: id,
+      action: 'deleted',
+      performedBy: session.user.id,
+      performedByName: session.user.name || '',
+    });
+
+    return NextResponse.json({ success: true, id });
+  } catch (error) {
+    console.error("DELETE /salary-payments error:", error);
     return NextResponse.json({
       error: "Internal server error",
       detail: error instanceof Error ? error.message : String(error),

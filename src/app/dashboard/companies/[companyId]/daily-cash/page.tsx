@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Plus, Banknote, Calendar, X, Filter, Trash2 } from "lucide-react";
 import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
+import { ApprovalBadge, EntryActions, EntryLogViewer, ConfirmDeleteDialog } from "@/components/ui/entry-actions";
 
 interface Staff {
   id: string;
@@ -31,11 +32,20 @@ interface DailyCashPayment {
   receiptNo?: string;
   approvedBy?: string;
   status: string;
+  approval_status?: string;
   paymentMethod?: string;
   fonepayRef?: string;
   attachmentUrl?: string;
   createdByName: string;
   createdAt: string;
+}
+
+interface EntryLog {
+  id: string;
+  action: string;
+  changedBy: string;
+  changedAt: string;
+  details?: string;
 }
 
 interface CategorySummary {
@@ -115,6 +125,14 @@ export default function DailyCashPage({ params }: PageProps) {
   const [lines, setLines] = useState<CollectionLine[]>([]);
   const [saving, setSaving] = useState(false);
   const [viewAttachment, setViewAttachment] = useState("");
+
+  // Edit, Delete, Approve/Reject, Logs
+  const [editPayment, setEditPayment] = useState<DailyCashPayment | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deletePayment, setDeletePayment] = useState<DailyCashPayment | null>(null);
+  const [logPayment, setLogPayment] = useState<DailyCashPayment | null>(null);
+  const [logs, setLogs] = useState<EntryLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   useEffect(() => {
     fetchCompany();
@@ -260,6 +278,103 @@ export default function DailyCashPage({ params }: PageProps) {
   }
 
   const totalFormAmount = lines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
+
+  // Edit handlers
+  function openEditDialog(payment: DailyCashPayment) {
+    setEditPayment(payment);
+    setEditDialogOpen(true);
+  }
+
+  function closeEditDialog() {
+    setEditPayment(null);
+    setEditDialogOpen(false);
+  }
+
+  async function handleEditSave(updatedPayment: DailyCashPayment) {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/daily-cash`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: updatedPayment.id,
+          action: "edit",
+          date: updatedPayment.date,
+          amount: updatedPayment.amount,
+          category: updatedPayment.category,
+          description: updatedPayment.description,
+          receiptNo: updatedPayment.receiptNo,
+          paymentMethod: updatedPayment.paymentMethod,
+          fonepayRef: updatedPayment.fonepayRef,
+          attachmentUrl: updatedPayment.attachmentUrl,
+          staff_id: updatedPayment.staff_id,
+        }),
+      });
+      if (res.ok) {
+        closeEditDialog();
+        await fetchPayments();
+      } else {
+        alert("Failed to update entry");
+      }
+    } catch (err) {
+      console.error("Edit save error:", err);
+      alert("Error saving changes");
+    }
+  }
+
+  // Delete handler
+  async function handleDelete(payment: DailyCashPayment) {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/daily-cash?id=${payment.id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setDeletePayment(null);
+        await fetchPayments();
+      } else {
+        alert("Failed to delete entry");
+      }
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert("Error deleting entry");
+    }
+  }
+
+  // Approve/Reject handler
+  async function handleApprovalAction(payment: DailyCashPayment, action: "approve" | "reject") {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/daily-cash`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: payment.id,
+          action,
+        }),
+      });
+      if (res.ok) {
+        await fetchPayments();
+      } else {
+        alert(`Failed to ${action} entry`);
+      }
+    } catch (err) {
+      console.error("Approval action error:", err);
+      alert(`Error ${action}ing entry`);
+    }
+  }
+
+  // View logs handler
+  async function handleViewLogs(payment: DailyCashPayment) {
+    setLogPayment(payment);
+    setLogsLoading(true);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/entry-logs?module=daily_cash&entryId=${payment.id}`);
+      const data = await res.json();
+      setLogs(data.logs || []);
+    } catch (err) {
+      console.error("Fetch logs error:", err);
+      setLogs([]);
+    }
+    setLogsLoading(false);
+  }
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -423,6 +538,8 @@ export default function DailyCashPage({ params }: PageProps) {
                     <th className="p-3 text-right">Amount</th>
                     <th className="p-3">Receipt/Ref</th>
                     <th className="p-3">Status</th>
+                    <th className="p-3">Approval</th>
+                    <th className="p-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -472,15 +589,28 @@ export default function DailyCashPage({ params }: PageProps) {
                             {p.status}
                           </Badge>
                         </td>
+                        <td className="p-3">
+                          <ApprovalBadge status={p.approval_status || "pending"} />
+                        </td>
+                        <td className="p-3">
+                          <EntryActions
+                            entry={p}
+                            onEdit={() => openEditDialog(p)}
+                            onDelete={() => setDeletePayment(p)}
+                            onApprove={() => handleApprovalAction(p, "approve")}
+                            onReject={() => handleApprovalAction(p, "reject")}
+                            onViewLog={() => handleViewLogs(p)}
+                          />
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
                 <tfoot>
                   <tr className="border-t bg-muted/30 font-semibold">
-                    <td className="p-3" colSpan={5}>Total</td>
+                    <td className="p-3" colSpan={6}>Total</td>
                     <td className="p-3 text-right">{formatCurrency(totalSummary.total_amount, companyCurrency)}</td>
-                    <td className="p-3" colSpan={2}>{payments.length} entries</td>
+                    <td className="p-3" colSpan={3}>{payments.length} entries</td>
                   </tr>
                 </tfoot>
               </table>
@@ -642,6 +772,145 @@ export default function DailyCashPage({ params }: PageProps) {
       {/* Attachment Viewer */}
       {viewAttachment && (
         <AttachmentViewer url={viewAttachment} onClose={() => setViewAttachment("")} />
+      )}
+
+      {/* Edit Dialog */}
+      {editDialogOpen && editPayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-background p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold">Edit Cash Entry</h2>
+              <button onClick={closeEditDialog} className="rounded p-1 hover:bg-accent">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Date *</Label>
+                  <Input
+                    type="date"
+                    value={editPayment.date}
+                    onChange={(e) => setEditPayment({ ...editPayment, date: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label>Staff</Label>
+                  <select
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    value={editPayment.staff_id || ""}
+                    onChange={(e) => setEditPayment({ ...editPayment, staff_id: e.target.value || undefined })}
+                  >
+                    <option value="">General (no specific staff)</option>
+                    {staff.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.role})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <Label>Category</Label>
+                  <select
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    value={editPayment.category}
+                    onChange={(e) => setEditPayment({ ...editPayment, category: e.target.value })}
+                  >
+                    {allCategories.map((c) => (
+                      <option key={c.value} value={c.value}>{c.icon} {c.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label>Payment Method</Label>
+                  <select
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    value={editPayment.paymentMethod || "cash"}
+                    onChange={(e) => setEditPayment({ ...editPayment, paymentMethod: e.target.value })}
+                  >
+                    <option value="cash">💵 Cash</option>
+                    <option value="fonepay">📱 Fonepay</option>
+                    <option value="bank">🏦 Bank Transfer</option>
+                    <option value="esewa">eSewa</option>
+                    <option value="khalti">Khalti</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Amount *</Label>
+                  <Input
+                    type="number"
+                    value={editPayment.amount}
+                    onChange={(e) => setEditPayment({ ...editPayment, amount: parseFloat(e.target.value) || 0 })}
+                  />
+                </div>
+              </div>
+
+              {editPayment.paymentMethod === "fonepay" && (
+                <div>
+                  <Label>Fonepay Reference ID</Label>
+                  <Input
+                    value={editPayment.fonepayRef || ""}
+                    onChange={(e) => setEditPayment({ ...editPayment, fonepayRef: e.target.value })}
+                    placeholder="Fonepay transaction reference"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Description</Label>
+                  <Input
+                    value={editPayment.description || ""}
+                    onChange={(e) => setEditPayment({ ...editPayment, description: e.target.value })}
+                    placeholder="e.g. Delivery cash collection"
+                  />
+                </div>
+                <div>
+                  <Label>Receipt No.</Label>
+                  <Input
+                    value={editPayment.receiptNo || ""}
+                    onChange={(e) => setEditPayment({ ...editPayment, receiptNo: e.target.value })}
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+
+              <FileUpload
+                label="Attach Receipt / Document"
+                currentUrl={editPayment.attachmentUrl}
+                onFileUploaded={(url) => setEditPayment({ ...editPayment, attachmentUrl: url })}
+                onClear={() => setEditPayment({ ...editPayment, attachmentUrl: undefined })}
+              />
+
+              <div className="flex justify-end gap-3 pt-4">
+                <Button variant="outline" onClick={closeEditDialog}>Cancel</Button>
+                <Button onClick={() => handleEditSave(editPayment)}>Save Changes</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deletePayment && (
+        <ConfirmDeleteDialog
+          title="Delete Cash Entry"
+          message={`Are you sure you want to delete this entry for ${formatCurrency(deletePayment.amount, companyCurrency)} on ${formatDate(deletePayment.date)}? This action cannot be undone.`}
+          onConfirm={() => handleDelete(deletePayment)}
+          onCancel={() => setDeletePayment(null)}
+        />
+      )}
+
+      {/* View Logs Dialog */}
+      {logPayment && (
+        <EntryLogViewer
+          entry={logPayment}
+          logs={logs}
+          loading={logsLoading}
+          onClose={() => setLogPayment(null)}
+        />
       )}
     </div>
         </div>

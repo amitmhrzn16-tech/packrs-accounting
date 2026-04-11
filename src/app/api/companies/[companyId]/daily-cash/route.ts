@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { notifySlack } from "@/lib/slack";
 import { formatCurrency } from "@/lib/utils";
+import { createEntryLog } from "@/lib/entry-log";
 
 function cuid() {
   return "dc" + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -150,13 +151,29 @@ export async function POST(
        VALUES ('${id}', '${params.companyId}', ${staffVal ? `'${staffVal}'` : "NULL"}, '${date}', ${Number(amount)}, '${cat}', '${desc}', '${receipt}', '${method}', '${fpRef}', ${approver ? `'${approver}'` : "NULL"}, '${statusVal}', ${attachment ? `'${attachment}'` : "NULL"}, '${session.user.id}', '${now}', '${now}')`
     );
 
-    // Create expense transaction for accounting
+    // Create transaction: income for cash_collection/fonepay, expense for others
     const txnId = "t" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const txnType = (cat === "cash_collection" || cat === "fonepay") ? "income" : "expense";
     const particulars = `Daily Cash: ${cat}${desc ? ` - ${desc}` : ""}${method === "fonepay" ? ` (Fonepay: ${fpRef})` : ""}`;
     await prisma.$executeRawUnsafe(
       `INSERT INTO transactions (id, company_id, type, amount, particulars, date, payment_method, created_by, source, created_at, updated_at)
-       VALUES ('${txnId}', '${params.companyId}', 'expense', ${Number(amount)}, '${particulars.replace(/'/g, "''")}', '${date}', '${method}', '${session.user.id}', 'web', '${now}', '${now}')`
+       VALUES ('${txnId}', '${params.companyId}', '${txnType}', ${Number(amount)}, '${particulars.replace(/'/g, "''")}', '${date}', '${method}', '${session.user.id}', 'web', '${now}', '${now}')`
     );
+
+    // Update daily_cash_payments with synced_txn_id
+    await prisma.$executeRawUnsafe(
+      `UPDATE daily_cash_payments SET synced_txn_id = '${txnId}' WHERE id = '${id}'`
+    );
+
+    // Create entry log
+    await createEntryLog({
+      companyId: params.companyId,
+      module: "daily_cash",
+      entryId: id,
+      action: "created",
+      performedBy: session.user.id,
+      performedByName: session.user.name || "",
+    });
 
     // Slack
     const company: any[] = await prisma.$queryRawUnsafe(`SELECT currency FROM companies WHERE id = ?`, params.companyId);
@@ -182,7 +199,7 @@ export async function POST(
   }
 }
 
-// PUT — update daily cash payment (for approval/rejection)
+// PUT — update daily cash payment (edit, approve, reject)
 export async function PUT(
   request: Request,
   { params }: { params: { companyId: string } }
@@ -198,20 +215,147 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { id: paymentId, status: newStatus, approvedBy } = body;
+    const { id: paymentId, action, status: newStatus, approvedBy, date, amount, category, description, receiptNo, paymentMethod, fonepayRef, attachmentUrl } = body;
 
-    if (!paymentId || !newStatus) {
-      return NextResponse.json({ error: "id and status are required" }, { status: 400 });
+    if (!paymentId) {
+      return NextResponse.json({ error: "id is required" }, { status: 400 });
     }
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE daily_cash_payments SET status = ?, approved_by = ?, updated_at = ? WHERE id = ? AND company_id = ?`,
-      newStatus, approvedBy || session.user.id, new Date().toISOString(), paymentId, params.companyId
-    );
+    const now = new Date().toISOString();
+
+    // Handle edit action
+    if (action === "edit") {
+      const updates: string[] = [];
+      if (date) updates.push(`date = '${date}'`);
+      if (amount) updates.push(`amount = ${Number(amount)}`);
+      if (category) updates.push(`category = '${category}'`);
+      if (description !== undefined) updates.push(`description = '${description.replace(/'/g, "''")}'`);
+      if (receiptNo !== undefined) updates.push(`receipt_no = '${receiptNo.replace(/'/g, "''")}'`);
+      if (paymentMethod) updates.push(`payment_method = '${paymentMethod}'`);
+      if (fonepayRef !== undefined) updates.push(`fonepay_ref = '${fonepayRef.replace(/'/g, "''")}'`);
+      if (attachmentUrl !== undefined) updates.push(`attachment_url = ${attachmentUrl ? `'${attachmentUrl.replace(/'/g, "''")}'` : "NULL"}`);
+      updates.push(`updated_at = '${now}'`);
+
+      if (updates.length > 0) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE daily_cash_payments SET ${updates.join(", ")} WHERE id = '${paymentId}' AND company_id = '${params.companyId}'`
+        );
+
+        await createEntryLog({
+          companyId: params.companyId,
+          module: "daily_cash",
+          entryId: paymentId,
+          action: "edited",
+          performedBy: session.user.id,
+          performedByName: session.user.name || "",
+        });
+      }
+    }
+    // Handle approve action
+    else if (action === "approve") {
+      await prisma.$executeRawUnsafe(
+        `UPDATE daily_cash_payments SET status = 'approved', approved_by = '${approvedBy || session.user.id}', approved_at = '${now}', updated_at = '${now}' WHERE id = '${paymentId}' AND company_id = '${params.companyId}'`
+      );
+
+      await createEntryLog({
+        companyId: params.companyId,
+        module: "daily_cash",
+        entryId: paymentId,
+        action: "approved",
+        performedBy: session.user.id,
+        performedByName: session.user.name || "",
+      });
+    }
+    // Handle reject action
+    else if (action === "reject") {
+      await prisma.$executeRawUnsafe(
+        `UPDATE daily_cash_payments SET status = 'rejected', updated_at = '${now}' WHERE id = '${paymentId}' AND company_id = '${params.companyId}'`
+      );
+
+      await createEntryLog({
+        companyId: params.companyId,
+        module: "daily_cash",
+        entryId: paymentId,
+        action: "rejected",
+        performedBy: session.user.id,
+        performedByName: session.user.name || "",
+      });
+    }
+    // Legacy status update (backward compatibility)
+    else if (newStatus) {
+      await prisma.$executeRawUnsafe(
+        `UPDATE daily_cash_payments SET status = '${newStatus}', approved_by = ${approvedBy ? `'${approvedBy}'` : `'${session.user.id}'`}, updated_at = '${now}' WHERE id = '${paymentId}' AND company_id = '${params.companyId}'`
+      );
+    }
+    else {
+      return NextResponse.json({ error: "action or status is required" }, { status: 400 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("PUT /daily-cash error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// DELETE — delete daily cash payment and linked transaction
+export async function DELETE(
+  request: Request,
+  { params }: { params: { companyId: string } }
+) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const access = await verifyAccess(session.user.id, params.companyId);
+    if (!access) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const url = new URL(request.url);
+    const paymentId = url.searchParams.get("id");
+
+    if (!paymentId) {
+      return NextResponse.json({ error: "id query parameter is required" }, { status: 400 });
+    }
+
+    // Get the daily cash payment to check for linked transaction
+    const payment: any[] = await prisma.$queryRawUnsafe(
+      `SELECT synced_txn_id FROM daily_cash_payments WHERE id = '${paymentId}' AND company_id = '${params.companyId}'`
+    );
+
+    if (!payment || payment.length === 0) {
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 });
+    }
+
+    const syncedTxnId = payment[0]?.synced_txn_id;
+
+    // Delete linked transaction if it exists
+    if (syncedTxnId) {
+      await prisma.$executeRawUnsafe(
+        `DELETE FROM transactions WHERE id = '${syncedTxnId}' AND company_id = '${params.companyId}'`
+      );
+    }
+
+    // Delete the daily cash payment
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM daily_cash_payments WHERE id = '${paymentId}' AND company_id = '${params.companyId}'`
+    );
+
+    // Create entry log
+    await createEntryLog({
+      companyId: params.companyId,
+      module: "daily_cash",
+      entryId: paymentId,
+      action: "deleted",
+      performedBy: session.user.id,
+      performedByName: session.user.name || "",
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("DELETE /daily-cash error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
