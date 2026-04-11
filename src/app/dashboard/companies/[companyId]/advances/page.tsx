@@ -602,6 +602,7 @@ export default function AdvancesPage({ params }: PageProps) {
           ) : advances.length === 0 ? (
             <p className="py-8 text-center text-muted-foreground">No advance payments found.</p>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/40 border-b">
@@ -756,6 +757,7 @@ export default function AdvancesPage({ params }: PageProps) {
                   ))}
               </div>
             )}
+            </>
           )}
         </CardContent>
       </Card>

@@ -1,9 +1,19 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 
 async function verifyAccess(userId: string, companyId: string) {
-  return prisma.companyUser.findFirst({ where: { userId, companyId } });
+  const result = await prisma.$queryRawUnsafe<
+    Array<{ id: string; user_id: string; company_id: string; role: string }>
+  >(
+    `SELECT id, user_id, company_id, role FROM company_users WHERE user_id = ? AND company_id = ?`,
+    userId,
+    companyId
+  );
+  return result?.[0]
+    ? { id: result[0].id, userId: result[0].user_id, companyId: result[0].company_id, role: result[0].role }
+    : null;
 }
 
 interface RouteParams {
@@ -64,7 +74,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       updatedAt: r.updated_at,
     }));
 
-    let unreconciled = [];
+    let unreconciled: any[] = [];
 
     // If bankAccountId is provided, fetch unreconciled transactions
     if (bankAccountId) {
@@ -157,31 +167,37 @@ export async function POST(request: Request, { params }: RouteParams) {
       params.companyId
     );
 
-    const openingBalance = accountResult?.[0]?.opening_balance || 0;
-    const totalTransactions = bookBalanceResult?.[0]?.total || 0;
+    const openingBalance = Number(accountResult?.[0]?.opening_balance) || 0;
+    const totalTransactions = Number(bookBalanceResult?.[0]?.total) || 0;
     const bookBalance = openingBalance + totalTransactions;
     const difference = statementBalance - bookBalance;
 
-    const reconciliation = await prisma.bankReconciliation.create({
-      data: {
-        companyId: params.companyId,
-        bankAccountId,
-        reconciliationDate,
-        statementBalance,
-        bookBalance,
-        difference,
-        status: "draft",
-      },
-    });
+    const reconciliationId = randomUUID();
+    const now = new Date().toISOString();
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO bank_reconciliations (id, company_id, bank_account_id, reconciliation_date, statement_balance, book_balance, difference, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      reconciliationId,
+      params.companyId,
+      bankAccountId,
+      reconciliationDate,
+      statementBalance,
+      bookBalance,
+      difference,
+      "draft",
+      now,
+      now
+    );
 
     return NextResponse.json({
-      id: reconciliation.id,
-      bankAccountId: reconciliation.bankAccountId,
-      reconciliationDate: reconciliation.reconciliationDate,
-      statementBalance: reconciliation.statementBalance,
-      bookBalance: reconciliation.bookBalance,
-      difference: reconciliation.difference,
-      status: reconciliation.status,
+      id: reconciliationId,
+      bankAccountId,
+      reconciliationDate,
+      statementBalance,
+      bookBalance,
+      difference,
+      status: "draft",
     });
   } catch (error) {
     console.error("Create bank reconciliation error:", error);
@@ -220,13 +236,11 @@ export async function PUT(request: Request, { params }: RouteParams) {
         );
       }
 
-      await prisma.transaction.update({
-        where: { id: transactionId },
-        data: {
-          isReconciled: true,
-          bankAccountId,
-        },
-      });
+      await prisma.$executeRawUnsafe(
+        `UPDATE transactions SET is_reconciled = 1, bank_account_id = ? WHERE id = ?`,
+        bankAccountId,
+        transactionId
+      );
 
       return NextResponse.json({ success: true, action: "reconciled" });
     }
@@ -240,13 +254,10 @@ export async function PUT(request: Request, { params }: RouteParams) {
         );
       }
 
-      await prisma.transaction.update({
-        where: { id: transactionId },
-        data: {
-          isReconciled: false,
-          bankAccountId: null,
-        },
-      });
+      await prisma.$executeRawUnsafe(
+        `UPDATE transactions SET is_reconciled = 0, bank_account_id = NULL WHERE id = ?`,
+        transactionId
+      );
 
       return NextResponse.json({ success: true, action: "unreconciled" });
     }
@@ -260,17 +271,35 @@ export async function PUT(request: Request, { params }: RouteParams) {
         );
       }
 
-      const reconciliation = await prisma.bankReconciliation.update({
-        where: { id: reconciliationId },
-        data: { status: "completed" },
-      });
+      const now = new Date().toISOString();
+
+      const result = await prisma.$executeRawUnsafe(
+        `UPDATE bank_reconciliations SET status = ?, updated_at = ? WHERE id = ?`,
+        "completed",
+        now,
+        reconciliationId
+      );
+
+      if (result === 0) {
+        return NextResponse.json(
+          { error: "Resource not found" },
+          { status: 404 }
+        );
+      }
+
+      const reconciliation = await prisma.$queryRawUnsafe<
+        Array<{ id: string; status: string }>
+      >(
+        `SELECT id, status FROM bank_reconciliations WHERE id = ?`,
+        reconciliationId
+      );
 
       return NextResponse.json({
         success: true,
         action: "completed",
         reconciliation: {
-          id: reconciliation.id,
-          status: reconciliation.status,
+          id: reconciliation?.[0]?.id,
+          status: reconciliation?.[0]?.status,
         },
       });
     }
@@ -284,26 +313,71 @@ export async function PUT(request: Request, { params }: RouteParams) {
         );
       }
 
-      const updateData: Record<string, any> = {};
-      if (body.reconciliationDate !== undefined)
-        updateData.reconciliationDate = body.reconciliationDate;
-      if (body.statementBalance !== undefined)
-        updateData.statementBalance = parseFloat(String(body.statementBalance));
+      const now = new Date().toISOString();
+      const updates: string[] = ["updated_at = ?"];
+      const params: any[] = [now];
 
-      const reconciliation = await prisma.bankReconciliation.update({
-        where: { id: reconciliationId },
-        data: updateData,
-      });
+      if (body.reconciliationDate !== undefined) {
+        updates.push("reconciliation_date = ?");
+        params.push(body.reconciliationDate);
+      }
+
+      if (body.statementBalance !== undefined) {
+        const newStatementBalance = parseFloat(String(body.statementBalance));
+        updates.push("statement_balance = ?");
+        params.push(newStatementBalance);
+
+        // Recalculate difference: fetch current book_balance and recalculate
+        const currentRec = await prisma.$queryRawUnsafe<
+          Array<{ book_balance: number }>
+        >(
+          `SELECT book_balance FROM bank_reconciliations WHERE id = ?`,
+          reconciliationId
+        );
+
+        if (currentRec?.[0]) {
+          const newDifference = newStatementBalance - Number(currentRec[0].book_balance);
+          updates.push("difference = ?");
+          params.push(newDifference);
+        }
+      }
+
+      params.push(reconciliationId);
+
+      const result = await prisma.$executeRawUnsafe(
+        `UPDATE bank_reconciliations SET ${updates.join(", ")} WHERE id = ?`,
+        ...params
+      );
+
+      if (result === 0) {
+        return NextResponse.json(
+          { error: "Resource not found" },
+          { status: 404 }
+        );
+      }
+
+      const reconciliation = await prisma.$queryRawUnsafe<
+        Array<{
+          id: string;
+          reconciliation_date: string;
+          statement_balance: number;
+          book_balance: number;
+          difference: number;
+        }>
+      >(
+        `SELECT id, reconciliation_date, statement_balance, book_balance, difference FROM bank_reconciliations WHERE id = ?`,
+        reconciliationId
+      );
 
       return NextResponse.json({
         success: true,
         action: "edited",
         reconciliation: {
-          id: reconciliation.id,
-          reconciliationDate: reconciliation.reconciliationDate,
-          statementBalance: reconciliation.statementBalance,
-          bookBalance: reconciliation.bookBalance,
-          difference: reconciliation.difference,
+          id: reconciliation?.[0]?.id,
+          reconciliationDate: reconciliation?.[0]?.reconciliation_date,
+          statementBalance: Number(reconciliation?.[0]?.statement_balance),
+          bookBalance: Number(reconciliation?.[0]?.book_balance),
+          difference: Number(reconciliation?.[0]?.difference),
         },
       });
     }
@@ -350,19 +424,21 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       );
     }
 
-    await prisma.bankReconciliation.delete({
-      where: { id },
-    });
+    const result = await prisma.$executeRawUnsafe(
+      `DELETE FROM bank_reconciliations WHERE id = ?`,
+      id
+    );
 
-    return NextResponse.json({ success: true });
-  } catch (error: any) {
-    console.error("Delete bank reconciliation error:", error);
-    if (error.code === "P2025") {
+    if (result === 0) {
       return NextResponse.json(
         { error: "Reconciliation not found" },
         { status: 404 }
       );
     }
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error("Delete bank reconciliation error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

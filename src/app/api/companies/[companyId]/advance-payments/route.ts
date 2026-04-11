@@ -311,7 +311,7 @@ export async function PUT(
         const totalWithInt = baseAmount + intAmount;
 
         updates.push(`amount = ?, interest_rate = ?, interest_amount = ?, total_with_interest = ?, due_amount = ?`);
-        values.push(baseAmount, intRate > 0 ? intRate : null, intAmount > 0 ? intAmount : null, totalWithInt > baseAmount ? totalWithInt : null, totalWithInt);
+        values.push(baseAmount, (intRate ?? 0) > 0 ? intRate : null, intAmount > 0 ? intAmount : null, totalWithInt > baseAmount ? totalWithInt : null, totalWithInt);
       } else if (interestRate !== undefined) {
         // Update interest rate only
         const currentAdvance: any[] = await prisma.$queryRawUnsafe(

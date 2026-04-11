@@ -163,7 +163,7 @@ export async function PUT(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const access = await verifyAccess(session.user.id, params.companyId);
-    if (!access || (access.role !== "company_admin" && session.user.role !== "super_admin")) {
+    if (!access || (access.role !== "company_admin" && (session.user as any).role !== "super_admin")) {
       return NextResponse.json({ error: "Only admins can manage permissions" }, { status: 403 });
     }
 
