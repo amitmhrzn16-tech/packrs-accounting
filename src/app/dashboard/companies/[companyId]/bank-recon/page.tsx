@@ -11,7 +11,7 @@ import {
   TrendingUp,
   TrendingDown,
   Calendar,
-  Bank,
+  Landmark,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -94,18 +94,21 @@ export default function BankReconPage({ params }: PageProps) {
   });
 
   const [selectedTxns, setSelectedTxns] = useState<Set<string>>(new Set());
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>('bank');
+
+  const PAYMENT_METHODS = ['bank', 'cash', 'esewa', 'khalti', 'cheque', 'fonepay'];
 
   // Load company and bank accounts
   useEffect(() => {
     loadCompanyData();
   }, [companyId]);
 
-  // Load reconciliation data when account selected
+  // Load reconciliation data when account or payment method selected
   useEffect(() => {
     if (selectedAccount) {
       loadReconciliationData();
     }
-  }, [selectedAccount]);
+  }, [selectedAccount, paymentMethodFilter]);
 
   const loadCompanyData = async () => {
     try {
@@ -138,7 +141,8 @@ export default function BankReconPage({ params }: PageProps) {
   const loadReconciliationData = async () => {
     try {
       const res = await fetch(
-        `/api/companies/${companyId}/bank-reconciliation?bankAccountId=${selectedAccount}`
+        `/api/companies/${companyId}/bank-reconciliation?bankAccountId=${selectedAccount}&paymentMethod=${paymentMethodFilter}&_t=${Date.now()}`,
+        { cache: "no-store" }
       );
       if (res.ok) {
         const data = await res.json();
@@ -337,13 +341,13 @@ export default function BankReconPage({ params }: PageProps) {
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar companyId={companyId} companyName={companyName} />
-      <MainContent companyName={companyName} title="Bank Reconciliation">
-        <div className="space-y-6">
+      <MainContent className="overflow-auto">
+        <div className="p-8 space-y-6">
           {/* Bank Accounts Section */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Bank className="w-5 h-5" />
+                <Landmark className="w-5 h-5" />
                 Bank Accounts
               </h2>
               <Button
@@ -447,6 +451,23 @@ export default function BankReconPage({ params }: PageProps) {
                   <Calendar className="w-4 h-4" />
                   New Session
                 </Button>
+              </div>
+
+              {/* Payment Method Filter */}
+              <div className="flex items-center gap-3">
+                <Label className="text-sm font-medium text-gray-700">Filter by Payment Method:</Label>
+                <select
+                  value={paymentMethodFilter}
+                  onChange={(e) => setPaymentMethodFilter(e.target.value)}
+                  className="px-3 py-1.5 border rounded-md text-sm bg-white"
+                >
+                  <option value="">All Methods</option>
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m.charAt(0).toUpperCase() + m.slice(1)}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <Card>

@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { FileUpload, AttachmentBadge, AttachmentViewer } from "@/components/ui/file-upload";
 import { ApprovalBadge, EntryActions, EntryLogViewer, ConfirmDeleteDialog } from "@/components/ui/entry-actions";
-import { getEntryLogs } from "@/lib/entry-log";
 
 interface Company {
   id: string;
@@ -147,9 +146,10 @@ export default function IntercompanyPage({ params }: PageProps) {
 
   async function fetchCompanies() {
     try {
-      const res = await fetch("/api/companies");
+      const res = await fetch("/api/companies?all=true&_t=" + Date.now(), { cache: "no-store" });
       const data = await res.json();
-      setCompanies(data.map((c: any) => ({ id: c.id, name: c.name })) || []);
+      const list = data.companies || data || [];
+      setCompanies((Array.isArray(list) ? list : []).map((c: any) => ({ id: c.id, name: c.name })));
     } catch (err) {
       console.error("fetchCompanies error:", err);
     }
@@ -312,8 +312,9 @@ export default function IntercompanyPage({ params }: PageProps) {
     setLogViewerTransferId(transferId);
     setLogViewerLoading(true);
     try {
-      const logs = await getEntryLogs("intercompany", transferId);
-      setLogViewerLogs(logs);
+      const res = await fetch(`/api/companies/${companyId}/entry-logs?module=intercompany&entryId=${transferId}&_t=${Date.now()}`, { cache: "no-store" });
+      const data = await res.json();
+      setLogViewerLogs(data.logs || []);
     } catch (err) {
       console.error("getEntryLogs error:", err);
       setLogViewerLogs([]);
@@ -665,8 +666,8 @@ export default function IntercompanyPage({ params }: PageProps) {
                   <div>
                     <Label>Attachment</Label>
                     <FileUpload
-                      onUpload={(url) => setForm({ ...form, attachmentUrl: url })}
-                      existingUrl={form.attachmentUrl}
+                      onFileUploaded={(url: string) => setForm({ ...form, attachmentUrl: url })}
+                      currentUrl={form.attachmentUrl}
                     />
                   </div>
                   <div className="flex gap-2 pt-4">

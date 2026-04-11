@@ -26,6 +26,8 @@ export async function GET(
     }
 
     const companyId = params.companyId;
+    const url = new URL(request.url);
+    const paymentMethodFilter = url.searchParams.get("paymentMethod") || "";
 
     // Get all bank transactions with match info
     const bankTransactions = await prisma.bankTransaction.findMany({
@@ -47,12 +49,16 @@ export async function GET(
 
     // Get unreconciled book entries (not matched to any bank transaction)
     const reconciledTxnIds = matchedBankTxnIds;
+    const bookWhere: any = {
+      companyId,
+      isReconciled: false,
+      id: { notIn: reconciledTxnIds },
+    };
+    if (paymentMethodFilter) {
+      bookWhere.paymentMethod = paymentMethodFilter;
+    }
     const unmatchedBookEntries = await prisma.transaction.findMany({
-      where: {
-        companyId,
-        isReconciled: false,
-        id: { notIn: reconciledTxnIds },
-      },
+      where: bookWhere,
       include: { category: true },
       orderBy: { date: "desc" },
     });

@@ -896,7 +896,7 @@ export default function IncomePage({ params }: PageProps) {
                             {formatCurrency(entry.amount, companyCurrency)}
                           </td>
                           <td className="py-3 px-4">
-                            <ApprovalBadge status={entry.approvalStatus} />
+                            <ApprovalBadge status={entry.approvalStatus || "pending"} />
                           </td>
                           <td className="py-3 px-2 text-center">
                             {entry.attachmentUrl && (
@@ -915,6 +915,7 @@ export default function IncomePage({ params }: PageProps) {
                           <td className="py-3 px-2">
                             <EntryActions
                               entryId={entry.id}
+                              approvalStatus={entry.approvalStatus || "pending"}
                               onEdit={() => handleEditOpen(entry)}
                               onDelete={() => setDeleteEntry(entry.id)}
                               onApprove={() => handleApprove(entry.id)}
@@ -962,20 +963,12 @@ export default function IncomePage({ params }: PageProps) {
 
       {/* Entry Log Viewer Modal */}
       {logEntry && (
-        <Dialog open={logEntry !== null} onOpenChange={(open) => !open && setLogEntry(null)}>
-          <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-auto">
-            <DialogHeader>
-              <DialogTitle>Entry Activity Log</DialogTitle>
-            </DialogHeader>
-            {logsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
-              </div>
-            ) : (
-              <EntryLogViewer logs={logs} />
-            )}
-          </DialogContent>
-        </Dialog>
+        <EntryLogViewer
+          logs={logs}
+          loading={logsLoading}
+          onClose={() => setLogEntry(null)}
+          title="Income Entry Log"
+        />
       )}
     </div>
   );

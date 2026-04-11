@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -131,20 +131,54 @@ export function EntryActions({
 interface LogEntry {
   id: string;
   action: string;
-  fieldChanges: Record<string, { old: any; new: any }> | null;
-  performedByName: string;
-  notes: string;
-  createdAt: string;
+  fieldChanges?: Record<string, { old: any; new: any }> | null;
+  performedByName?: string;
+  performedBy?: string;
+  changedBy?: string;
+  performer?: string;
+  notes?: string;
+  details?: string;
+  createdAt?: string;
+  changedAt?: string;
+  timestamp?: string;
 }
 
 interface EntryLogViewerProps {
-  logs: LogEntry[];
+  logs?: LogEntry[];
   loading?: boolean;
   onClose: () => void;
   title?: string;
+  // Self-fetching mode: pass these instead of logs
+  companyId?: string;
+  module?: string;
+  entryId?: string;
+  // Legacy extra props (ignored but accepted to avoid type errors)
+  entry?: any;
 }
 
-export function EntryLogViewer({ logs, loading, onClose, title = "Entry Log" }: EntryLogViewerProps) {
+export function EntryLogViewer({ logs: propLogs, loading: propLoading, onClose, title = "Entry Log", companyId, module, entryId }: EntryLogViewerProps) {
+  const [fetchedLogs, setFetchedLogs] = useState<LogEntry[]>([]);
+  const [fetchLoading, setFetchLoading] = useState(false);
+
+  // Self-fetching mode: if companyId + module + entryId are provided, fetch logs internally
+  useEffect(() => {
+    if (companyId && module && entryId) {
+      setFetchLoading(true);
+      fetch(`/api/companies/${companyId}/entry-logs?module=${module}&entryId=${entryId}&_t=${Date.now()}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((data) => {
+          setFetchedLogs(data.logs || []);
+        })
+        .catch((err) => {
+          console.error("EntryLogViewer fetch error:", err);
+          setFetchedLogs([]);
+        })
+        .finally(() => setFetchLoading(false));
+    }
+  }, [companyId, module, entryId]);
+
+  const logs = propLogs || fetchedLogs;
+  const loading = propLoading || fetchLoading;
   const actionColors: Record<string, string> = {
     created: "text-green-600 bg-green-50",
     edited: "text-blue-600 bg-blue-50",
@@ -180,12 +214,12 @@ export function EntryLogViewer({ logs, loading, onClose, title = "Entry Log" }: 
                       {log.action.toUpperCase()}
                     </span>
                     <span className="text-xs text-gray-400">
-                      {new Date(log.createdAt).toLocaleString()}
+                      {new Date(log.createdAt || log.changedAt || log.timestamp || "").toLocaleString()}
                     </span>
                   </div>
                   <p className="text-sm text-gray-700">
-                    <span className="font-medium">{log.performedByName}</span>
-                    {log.notes && <span className="text-gray-500"> — {log.notes}</span>}
+                    <span className="font-medium">{log.performedByName || log.performedBy || log.changedBy || log.performer || "System"}</span>
+                    {(log.notes || log.details) && <span className="text-gray-500"> — {log.notes || log.details}</span>}
                   </p>
                   {log.fieldChanges && Object.keys(log.fieldChanges).length > 0 && (
                     <div className="mt-2 text-xs bg-gray-50 rounded p-2 space-y-1">
@@ -215,12 +249,19 @@ export function EntryLogViewer({ logs, loading, onClose, title = "Entry Log" }: 
 interface ConfirmDeleteProps {
   title?: string;
   message?: string;
+  description?: string;
   onConfirm: () => void;
   onCancel: () => void;
   loading?: boolean;
+  isLoading?: boolean;
+  open?: boolean;
 }
 
-export function ConfirmDeleteDialog({ title = "Delete Entry", message = "Are you sure? This action cannot be undone.", onConfirm, onCancel, loading }: ConfirmDeleteProps) {
+export function ConfirmDeleteDialog({ title = "Delete Entry", message, description, onConfirm, onCancel, loading, isLoading, open }: ConfirmDeleteProps) {
+  // Support open prop - if explicitly false, don't render
+  if (open === false) return null;
+  const isLoadingFinal = loading || isLoading || false;
+  const displayMessage = message || description || "Are you sure? This action cannot be undone.";
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50" onClick={onCancel}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
@@ -230,10 +271,10 @@ export function ConfirmDeleteDialog({ title = "Delete Entry", message = "Are you
           </div>
           <h3 className="font-semibold text-gray-900">{title}</h3>
         </div>
-        <p className="text-sm text-gray-600 mb-6">{message}</p>
+        <p className="text-sm text-gray-600 mb-6">{displayMessage}</p>
         <div className="flex gap-3">
-          <Button variant="destructive" className="flex-1" onClick={onConfirm} disabled={loading}>
-            {loading ? "Deleting..." : "Delete"}
+          <Button variant="destructive" className="flex-1" onClick={onConfirm} disabled={isLoadingFinal}>
+            {isLoadingFinal ? "Deleting..." : "Delete"}
           </Button>
           <Button variant="outline" className="flex-1" onClick={onCancel}>Cancel</Button>
         </div>

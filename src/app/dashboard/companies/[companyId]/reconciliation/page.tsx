@@ -110,6 +110,8 @@ export default function ReconciliationPage({ params }: { params: { companyId: st
     paymentMethod: 'Bank',
     particulars: '',
   });
+  const [reconPaymentMethod, setReconPaymentMethod] = useState<string>('bank');
+  const PAYMENT_METHODS_LIST = ['bank', 'cash', 'esewa', 'khalti', 'cheque', 'fonepay'];
 
   // Fetch company name
   useEffect(() => {
@@ -128,17 +130,17 @@ export default function ReconciliationPage({ params }: { params: { companyId: st
     fetchCompanyName();
   }, [params.companyId]);
 
-  // Fetch reconciliation data when tab is active
+  // Fetch reconciliation data when tab is active or payment method changes
   useEffect(() => {
     if (activeTab === 'reconciliation') {
       fetchReconciliationData();
     }
-  }, [activeTab]);
+  }, [activeTab, reconPaymentMethod]);
 
   const fetchReconciliationData = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/companies/${params.companyId}/reconciliation`);
+      const res = await fetch(`/api/companies/${params.companyId}/reconciliation?paymentMethod=${reconPaymentMethod}&_t=${Date.now()}`, { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
         // Map API response shape to UI expected shape
@@ -671,6 +673,26 @@ export default function ReconciliationPage({ params }: { params: { companyId: st
           {/* TAB 2: Reconciliation Dashboard */}
           {activeTab === 'reconciliation' && (
             <div className="space-y-8">
+              {/* Payment Method Filter */}
+              <div className="flex items-center gap-3 bg-white p-3 rounded-lg border">
+                <Label className="text-sm font-medium text-gray-700">Payment Method:</Label>
+                <select
+                  value={reconPaymentMethod}
+                  onChange={(e) => setReconPaymentMethod(e.target.value)}
+                  className="px-3 py-1.5 border rounded-md text-sm bg-white"
+                >
+                  <option value="">All Methods</option>
+                  {PAYMENT_METHODS_LIST.map((m) => (
+                    <option key={m} value={m}>
+                      {m.charAt(0).toUpperCase() + m.slice(1)}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 ml-2">
+                  Filter which payment method transactions to include in reconciliation
+                </p>
+              </div>
+
               {loading && !reconciliationData && (
                 <div className="flex items-center justify-center h-64">
                   <div className="animate-spin">

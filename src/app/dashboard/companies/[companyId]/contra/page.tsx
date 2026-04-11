@@ -640,9 +640,11 @@ export default function ContraPage() {
         {/* Entry Log Viewer */}
         {showLogViewer && (
           <EntryLogViewer
+            companyId={companyId}
             module="contra"
             entryId={logViewerEntryId}
             onClose={() => setShowLogViewer(false)}
+            title="Contra Entry Log"
           />
         )}
 

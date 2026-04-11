@@ -652,7 +652,7 @@ export default function AdvancesPage({ params }: PageProps) {
                           {getStatusBadge(a.status)}
                         </td>
                         <td className="px-4 py-3">
-                          <ApprovalBadge status={a.approvalStatus} />
+                          <ApprovalBadge status={a.approvalStatus || "pending"} />
                         </td>
                         <td className="px-4 py-3">
                           <div className="relative inline-block">

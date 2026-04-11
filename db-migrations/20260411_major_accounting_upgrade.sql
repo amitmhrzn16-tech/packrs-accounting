@@ -167,8 +167,9 @@ CREATE TABLE IF NOT EXISTS bank_reconciliation (
   FOREIGN KEY (bank_account_id) REFERENCES bank_accounts(id)
 );
 
--- Link transactions to specific bank accounts
+-- Link transactions to specific bank accounts and reconciliation status
 ALTER TABLE transactions ADD COLUMN bank_account_id TEXT DEFAULT NULL;
+ALTER TABLE transactions ADD COLUMN is_reconciled INTEGER DEFAULT 0;
 
 -- ==========================================
 -- 7. MODULE PERMISSIONS TABLE

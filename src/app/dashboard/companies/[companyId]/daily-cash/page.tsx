@@ -594,7 +594,8 @@ export default function DailyCashPage({ params }: PageProps) {
                         </td>
                         <td className="p-3">
                           <EntryActions
-                            entry={p}
+                            entryId={p.id}
+                            approvalStatus={p.approval_status || "pending"}
                             onEdit={() => openEditDialog(p)}
                             onDelete={() => setDeletePayment(p)}
                             onApprove={() => handleApprovalAction(p, "approve")}

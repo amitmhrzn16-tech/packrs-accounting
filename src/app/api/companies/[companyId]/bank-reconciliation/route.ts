@@ -38,8 +38,16 @@ export async function GET(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    // Ensure is_reconciled column exists (self-healing migration)
+    try {
+      await prisma.$executeRawUnsafe(`ALTER TABLE transactions ADD COLUMN is_reconciled INTEGER DEFAULT 0`);
+    } catch (_) {
+      // Column already exists, ignore
+    }
+
     const url = new URL(request.url);
     const bankAccountId = url.searchParams.get("bankAccountId");
+    const paymentMethod = url.searchParams.get("paymentMethod") || "bank";
 
     // Get all reconciliation sessions for the company
     const reconciliations = await prisma.$queryRawUnsafe<
@@ -56,7 +64,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       }>
     >(
       `SELECT id, bank_account_id, reconciliation_date, statement_balance, book_balance, difference, status, created_at, updated_at
-       FROM bank_reconciliations
+       FROM bank_reconciliation
        WHERE company_id = ?
        ORDER BY created_at DESC`,
       params.companyId
@@ -78,6 +86,9 @@ export async function GET(request: Request, { params }: RouteParams) {
 
     // If bankAccountId is provided, fetch unreconciled transactions
     if (bankAccountId) {
+      const pmFilter = paymentMethod
+        ? `AND LOWER(payment_method) = LOWER('${paymentMethod.replace(/'/g, "''")}')`
+        : "";
       unreconciled = await prisma.$queryRawUnsafe<
         Array<{
           id: string;
@@ -89,9 +100,9 @@ export async function GET(request: Request, { params }: RouteParams) {
           is_reconciled: number;
         }>
       >(
-        `SELECT id, date, type, amount, particulars, payment_method, is_reconciled
+        `SELECT id, date, type, amount, particulars, payment_method, COALESCE(is_reconciled, 0) as is_reconciled
          FROM transactions
-         WHERE company_id = ? AND payment_method = 'bank' AND (bank_account_id = ? OR bank_account_id IS NULL)
+         WHERE company_id = ? ${pmFilter} AND (bank_account_id = ? OR bank_account_id IS NULL)
          ORDER BY date DESC`,
         params.companyId,
         bankAccountId
@@ -176,7 +187,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     const now = new Date().toISOString();
 
     await prisma.$executeRawUnsafe(
-      `INSERT INTO bank_reconciliations (id, company_id, bank_account_id, reconciliation_date, statement_balance, book_balance, difference, status, created_at, updated_at)
+      `INSERT INTO bank_reconciliation (id, company_id, bank_account_id, reconciliation_date, statement_balance, book_balance, difference, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       reconciliationId,
       params.companyId,
@@ -274,7 +285,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       const now = new Date().toISOString();
 
       const result = await prisma.$executeRawUnsafe(
-        `UPDATE bank_reconciliations SET status = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE bank_reconciliation SET status = ?, updated_at = ? WHERE id = ?`,
         "completed",
         now,
         reconciliationId
@@ -290,7 +301,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       const reconciliation = await prisma.$queryRawUnsafe<
         Array<{ id: string; status: string }>
       >(
-        `SELECT id, status FROM bank_reconciliations WHERE id = ?`,
+        `SELECT id, status FROM bank_reconciliation WHERE id = ?`,
         reconciliationId
       );
 
@@ -331,7 +342,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
         const currentRec = await prisma.$queryRawUnsafe<
           Array<{ book_balance: number }>
         >(
-          `SELECT book_balance FROM bank_reconciliations WHERE id = ?`,
+          `SELECT book_balance FROM bank_reconciliation WHERE id = ?`,
           reconciliationId
         );
 
@@ -345,7 +356,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       params.push(reconciliationId);
 
       const result = await prisma.$executeRawUnsafe(
-        `UPDATE bank_reconciliations SET ${updates.join(", ")} WHERE id = ?`,
+        `UPDATE bank_reconciliation SET ${updates.join(", ")} WHERE id = ?`,
         ...params
       );
 
@@ -365,7 +376,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
           difference: number;
         }>
       >(
-        `SELECT id, reconciliation_date, statement_balance, book_balance, difference FROM bank_reconciliations WHERE id = ?`,
+        `SELECT id, reconciliation_date, statement_balance, book_balance, difference FROM bank_reconciliation WHERE id = ?`,
         reconciliationId
       );
 
@@ -425,7 +436,7 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     }
 
     const result = await prisma.$executeRawUnsafe(
-      `DELETE FROM bank_reconciliations WHERE id = ?`,
+      `DELETE FROM bank_reconciliation WHERE id = ?`,
       id
     );
 
